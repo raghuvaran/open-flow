@@ -146,8 +146,17 @@
 
     await listen("audio_level", (e) => updateBars(e.payload));
     await listen("pipeline_state", (e) => { processing = e.payload === "processing"; });
-    await listen("accessibility_missing", () => { accessWarning = true; });
+    await listen("accessibility_missing", () => { if (!accessHint) accessWarning = true; });
     await listen("accessibility_granted", () => { accessWarning = false; accessHint = false; });
+
+    // Fallback: poll to clear stuck accessibility hint
+    setInterval(async () => {
+      if (!accessHint && !accessWarning) return;
+      try {
+        const granted = await invoke("check_accessibility_cmd");
+        if (granted) { accessWarning = false; accessHint = false; }
+      } catch {}
+    }, 3000);
 
     await listen("download_progress", (e) => {
       const p = e.payload;

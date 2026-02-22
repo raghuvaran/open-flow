@@ -38,6 +38,10 @@ fn simulate_paste() -> Result<()> {
 
 /// Inject text at cursor via clipboard paste simulation.
 pub fn inject_text(text: &str) -> Result<()> {
+    if !check_accessibility() {
+        anyhow::bail!("Accessibility permission not granted — paste will fail");
+    }
+
     let mut clip = Clipboard::new()?;
     let original = clip.get_text().ok();
 

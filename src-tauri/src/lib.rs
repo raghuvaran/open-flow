@@ -28,6 +28,7 @@ use tokio::sync::mpsc;
 
 pub static WALKIE_TALKIE: AtomicBool = AtomicBool::new(false);
 static LAST_DICTATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static VAD_INIT_FAILED: AtomicBool = AtomicBool::new(false);
 
 struct AppResources {
     state: AppState,
@@ -276,9 +277,16 @@ async fn start_listening(app: tauri::AppHandle, res: tauri::State<'_, SharedReso
                 Err(e) => { tracing::error!("Capture failed: {}", e); return; }
             };
 
-            let mut vad = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                SileroVad::new(&vad_path, 0.5).ok()
-            })).unwrap_or(None);
+            let mut vad = if VAD_INIT_FAILED.load(Ordering::Relaxed) {
+                None
+            } else {
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    SileroVad::new(&vad_path, 0.5).ok()
+                })) {
+                    Ok(v) => v,
+                    Err(_) => { VAD_INIT_FAILED.store(true, Ordering::Relaxed); None }
+                }
+            };
             if vad.is_none() {
                 tracing::warn!("Silero VAD unavailable, using energy-based detection");
             }
@@ -408,6 +416,11 @@ async fn open_accessibility_settings() -> Result<(), String> {
         .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
         .spawn().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[tauri::command]
+async fn check_accessibility_cmd() -> Result<bool, String> {
+    Ok(inject::clipboard::check_accessibility())
 }
 
 #[tauri::command]
@@ -606,7 +619,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             check_models, download_models, load_models,
             start_listening, stop_listening,
-            get_app_state, open_accessibility_settings, get_active_app_info,
+            get_app_state, open_accessibility_settings, check_accessibility_cmd, get_active_app_info,
             get_hint,
             add_dictionary_word, get_dictionary,
             toggle_polish, get_polish_enabled,
