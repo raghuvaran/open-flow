@@ -28,6 +28,28 @@ fn to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
         .collect()
 }
 
+/// Check mic permission without triggering a prompt.
+/// Returns false on first launch (before user grants access).
+pub fn has_mic_permission() -> bool {
+    // If the app's mic permission file exists in TCC, we've been granted access before.
+    // This avoids calling cpal (which triggers the macOS permission dialog).
+    let home = std::env::var("HOME").unwrap_or_default();
+    let tcc_path = format!("{}/Library/Application Support/com.apple.TCC/TCC.db", home);
+    if !std::path::Path::new(&tcc_path).exists() {
+        // Can't check — assume not granted to be safe
+        return false;
+    }
+    // Fallback: check if we've successfully captured audio before (marker file)
+    let marker = crate::config::AppConfig::default().models_dir.join(".mic_granted");
+    marker.exists()
+}
+
+/// Mark that mic permission has been granted (call after successful capture).
+pub fn mark_mic_granted() {
+    let marker = crate::config::AppConfig::default().models_dir.join(".mic_granted");
+    let _ = std::fs::write(&marker, "1");
+}
+
 pub fn list_input_devices() -> Result<Vec<String>> {
     let host = cpal::default_host();
     Ok(host.input_devices()?

@@ -87,7 +87,11 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     let walkie_on = WALKIE_TALKIE.load(Ordering::Relaxed);
     let autostart_on = is_autostart_enabled();
 
-    let mics = audio::capture::list_input_devices().unwrap_or_default();
+    let mics = if audio::capture::has_mic_permission() {
+        audio::capture::list_input_devices().unwrap_or_default()
+    } else {
+        vec![]
+    };
     let saved_mic = conn.as_ref()
         .and_then(|c| settings::get(c, "mic_device").ok().flatten())
         .unwrap_or_default();
@@ -259,7 +263,10 @@ async fn start_listening(app: tauri::AppHandle, res: tauri::State<'_, SharedReso
         rt.block_on(async {
             let (audio_tx, mut audio_rx) = mpsc::unbounded_channel::<Vec<f32>>();
             let mut capture = match audio::capture::start_capture(audio_tx, mic_name.as_deref()) {
-                Ok(c) => c,
+                Ok(c) => {
+                    audio::capture::mark_mic_granted();
+                    c
+                },
                 Err(e) => { tracing::error!("Capture failed: {}", e); return; }
             };
 
