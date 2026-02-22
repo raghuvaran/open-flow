@@ -5,6 +5,7 @@ pub struct Chunker {
     is_speaking: bool,
     silence_frames: u32,
     silence_threshold_frames: u32, // e.g., 700ms / 30ms = ~23 frames
+    max_samples: usize,            // cap at 60s to prevent unbounded growth
 }
 
 impl Chunker {
@@ -14,6 +15,7 @@ impl Chunker {
             is_speaking: false,
             silence_frames: 0,
             silence_threshold_frames: (silence_threshold_ms / 30) as u32,
+            max_samples: 16000 * 60, // 60s at 16kHz
         }
     }
 
@@ -23,6 +25,11 @@ impl Chunker {
             self.is_speaking = true;
             self.silence_frames = 0;
             self.buffer.extend_from_slice(frame);
+            if self.buffer.len() >= self.max_samples {
+                self.is_speaking = false;
+                self.silence_frames = 0;
+                return Some(std::mem::take(&mut self.buffer));
+            }
             None
         } else if self.is_speaking {
             self.silence_frames += 1;
