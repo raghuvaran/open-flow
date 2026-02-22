@@ -61,6 +61,13 @@ pub fn init_db(path: &Path) -> Result<Connection> {
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS hint_cache (
+            app_name TEXT NOT NULL,
+            hint TEXT NOT NULL,
+            generated_date TEXT NOT NULL,
+            PRIMARY KEY (app_name, generated_date)
+        );
         ",
     )?;
     Ok(conn)

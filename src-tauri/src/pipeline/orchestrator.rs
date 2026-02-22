@@ -96,5 +96,16 @@ fn process_segment(asr: &AsrEngine, polish: Option<&PolishEngine>, audio: &[f32]
 
     tracing::info!("Total pipeline ({:?}): {}", start.elapsed(), &final_text);
     clipboard::inject_text(&final_text)?;
+
+    // Record app usage for hint generation
+    let ctx = get_active_app();
+    if let Ok(conn) = crate::db::schema::init_db(&crate::config::AppConfig::default().db_path) {
+        let _ = crate::db::hints::record_usage(&conn, &ctx.app_name);
+    }
+    crate::LAST_DICTATION.store(
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+
     Ok(())
 }
