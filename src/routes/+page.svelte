@@ -10,8 +10,43 @@
   let statusMsg = $state("Loading...");
   let downloadMsg = $state("");
   let accessWarning = $state(false);
+  let accessHint = $state(false);
   let bars = $state(Array(NUM_BARS).fill(0.05));
   let hovered = $state(false);
+
+  let hintTimer;
+  let hintText = $state("");
+  let hintVisible = $state(false);
+
+  function startHintPolling() {
+    clearInterval(hintTimer);
+    hintText = "";
+    hintVisible = false;
+    hintTimer = setInterval(async () => {
+      if (phase !== "ready" || processing || accessWarning || accessHint) return;
+      try {
+        const h = await invoke("get_hint");
+        if (h && h !== hintText) {
+          hintVisible = false;
+          setTimeout(() => { hintText = h; hintVisible = true; }, 300);
+        }
+      } catch {}
+    }, 20000); // rotate every 20s
+    // Also fire immediately
+    setTimeout(async () => {
+      if (phase !== "ready" || processing) return;
+      try {
+        const h = await invoke("get_hint");
+        if (h) { hintText = h; hintVisible = true; }
+      } catch {}
+    }, 2000);
+  }
+
+  function clearHint() {
+    hintText = "";
+    hintVisible = false;
+    clearInterval(hintTimer);
+  }
 
   let rawLevel = 0;
   let smoothBars = Array(NUM_BARS).fill(0.05);
@@ -59,6 +94,7 @@
     await invoke("start_listening");
     phase = "listening";
     statusMsg = "Listening";
+    clearHint();
     idleAnimate();
   }
 
@@ -70,6 +106,7 @@
     smoothBars.fill(0.05);
     bars = [...smoothBars];
     cancelAnimationFrame(idleFrame);
+    startHintPolling();
   }
 
   async function toggle() {
@@ -105,9 +142,12 @@
 
     await win.onMoved(onMoved);
 
+    document.addEventListener("pointerleave", () => { hovered = false; });
+
     await listen("audio_level", (e) => updateBars(e.payload));
     await listen("pipeline_state", (e) => { processing = e.payload === "processing"; });
     await listen("accessibility_missing", () => { accessWarning = true; });
+    await listen("accessibility_granted", () => { accessWarning = false; accessHint = false; });
 
     await listen("download_progress", (e) => {
       const p = e.payload;
@@ -156,14 +196,15 @@
       await invoke("load_models");
       phase = "ready";
       statusMsg = "Ready";
+      startHintPolling();
     } catch (e) { statusMsg = `Error: ${e}`; }
   });
 </script>
 
 <main>
   <div class="pill" class:listening={phase === "listening"} class:processing
-    onmouseenter={() => hovered = true}
-    onmouseleave={() => hovered = false}
+    onpointerenter={() => hovered = true}
+    onpointerleave={() => hovered = false}
     onmousedown={(e) => { if (e.target.closest('button')) return; getCurrentWindow().startDragging(); }}>
 
     <button class="mic-btn" onclick={toggle} disabled={phase === "init" || phase === "loading"}>
@@ -186,7 +227,7 @@
     {#if processing}<div class="proc-dot"></div>{/if}
 
     <span class="label">
-      {#if accessWarning && phase === "ready"}⚠ Enable Accessibility{:else if processing}Processing{:else}{statusMsg}{/if}
+      {#if accessHint && phase === "ready"}<span class="access-hint">Click + → add OpenFlow → toggle on</span>{:else if accessWarning && phase === "ready"}<span class="access-link" onclick={() => { invoke("open_accessibility_settings"); accessWarning = false; accessHint = true; }}>⚠ Enable Accessibility →</span>{:else if processing}Processing{:else if hintText && hintVisible && phase === "ready"}<span class="hint" class:hint-visible={hintVisible}>{hintText}</span>{:else}{statusMsg}{/if}
     </span>
 
     {#if hovered}
@@ -213,7 +254,7 @@
   .pill {
     display: flex; align-items: center; gap: 8px;
     padding: 6px 12px 6px 6px;
-    background: rgba(18, 18, 30, 0.88);
+    background: rgba(18, 18, 30, 0.44);
     backdrop-filter: blur(24px) saturate(180%);
     -webkit-backdrop-filter: blur(24px) saturate(180%);
     border: 1px solid rgba(255,255,255,0.07);
@@ -221,6 +262,8 @@
     box-shadow: 0 2px 20px rgba(0,0,0,0.45), 0 0 0 0.5px rgba(255,255,255,0.05);
     transition: border-color 0.3s, box-shadow 0.3s;
     position: relative;
+    cursor: grab;
+    user-select: none;
   }
   .pill.listening {
     border-color: rgba(80, 200, 120, 0.3);
@@ -264,6 +307,7 @@
   .label {
     color: #777; font-size: 11px; white-space: nowrap;
     letter-spacing: 0.01em; overflow: hidden; text-overflow: ellipsis; max-width: 200px;
+    cursor: default;
   }
   .pill.listening .label { color: #50c878; }
   .pill.processing .label { color: #648cff; }
@@ -275,4 +319,9 @@
     transition: all 0.15s; flex-shrink: 0;
   }
   .close-btn:hover { background: rgba(255,80,80,0.25); color: #ff6666; }
+  .access-link { cursor: pointer; color: #e8a838; }
+  .access-link:hover { color: #f0c060; text-decoration: underline; }
+  .access-hint { color: #888; font-style: italic; }
+  .hint { color: #666; font-style: italic; opacity: 0; transition: opacity 0.5s ease; }
+  .hint-visible { opacity: 1; }
 </style>

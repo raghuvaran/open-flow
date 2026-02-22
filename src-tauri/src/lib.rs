@@ -19,6 +19,7 @@ use state::AppState;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Emitter;
+use tauri::Manager;
 use tauri::menu::{MenuBuilder, MenuItemBuilder, CheckMenuItemBuilder, SubmenuBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::image::Image;
@@ -26,6 +27,7 @@ use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 
 pub static WALKIE_TALKIE: AtomicBool = AtomicBool::new(false);
+static LAST_DICTATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 struct AppResources {
     state: AppState,
@@ -180,10 +182,11 @@ async fn check_models() -> Result<serde_json::Value, String> {
     let asr = config.models_dir.join("ggml-base.bin").exists()
            || config.models_dir.join("ggml-small.bin").exists();
     let llm = config.models_dir.join("qwen2.5-3b-instruct-q4_k_m.gguf").exists();
+    let server = config.models_dir.join(models::download::LLAMA_SERVER_FILENAME).exists();
     Ok(serde_json::json!({
-        "vad": vad, "asr": asr, "llm": llm,
+        "vad": vad, "asr": asr, "llm": llm, "server": server,
         "models_dir": config.models_dir.to_string_lossy(),
-        "all_ready": vad && asr && llm,
+        "all_ready": vad && asr && llm && server,
     }))
 }
 
@@ -387,8 +390,99 @@ async fn get_app_state(res: tauri::State<'_, SharedResources>) -> Result<String,
 }
 
 #[tauri::command]
+async fn open_accessibility_settings() -> Result<(), String> {
+    std::process::Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        .spawn().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 async fn get_active_app_info() -> Result<String, String> {
     serde_json::to_string(&inject::context::get_active_app()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_hint() -> Result<String, String> {
+    let config = AppConfig::default();
+    let conn = schema::init_db(&config.db_path).map_err(|e| e.to_string())?;
+    // Return a random hint from today's cache
+    let hint: Option<String> = conn.prepare(
+        "SELECT hint FROM hint_cache WHERE generated_date = date('now') ORDER BY RANDOM() LIMIT 1"
+    ).and_then(|mut s| {
+        let mut rows = s.query_map([], |row| row.get::<_, String>(0))?;
+        Ok(rows.next().and_then(|r| r.ok()))
+    }).unwrap_or(None);
+    Ok(hint.unwrap_or_default())
+}
+
+async fn start_hint_generator(res: SharedResources) {
+    let mut first = true;
+    loop {
+            let delay = if first { first = false; 60 } else { 300 };
+            tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+
+            // Skip if user dictated in the last 30s (LLM might be busy)
+            let last = LAST_DICTATION.load(Ordering::Relaxed);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+            if last > 0 && now - last < 30 { continue; }
+
+            generate_hints(&res).await;
+    }
+}
+
+async fn generate_hints(res: &SharedResources) {
+    let config = AppConfig::default();
+    let conn = match schema::init_db(&config.db_path) {
+        Ok(c) => c, Err(_) => return,
+    };
+
+    // Use top apps from history, or seed with common apps on first run
+    let mut apps = db::hints::top_apps(&conn, 5).unwrap_or_default();
+    if apps.is_empty() {
+        apps = vec!["Safari", "Chrome", "Slack", "VS Code", "Notes"]
+            .into_iter().map(String::from).collect();
+    }
+
+    // Skip if all apps already have today's hints
+    let need: Vec<_> = apps.iter()
+        .filter(|a| db::hints::get_hint(&conn, a).ok().flatten().is_none())
+        .cloned().collect();
+    if need.is_empty() { return; }
+
+    let polish = {
+        let r = res.lock().await;
+        r.polish.clone()
+    };
+    let engine = match polish {
+        Some(e) => e, None => return,
+    };
+
+    let app_list = need.join(", ");
+    let prompt = format!(
+        "Generate a short, subtle voice dictation hint (max 6 words) for each app. \
+         The hint should remind the user they can dictate instead of typing. \
+         Be creative, varied, not generic. One hint per line, format: AppName: hint\n\nApps: {}",
+        app_list
+    );
+
+    let result = tokio::task::spawn_blocking(move || {
+        engine.generate("You write ultra-concise UI microcopy.", &prompt, 128)
+    }).await;
+
+    if let Ok(Ok(text)) = result {
+        for line in text.lines() {
+            if let Some((app, hint)) = line.split_once(':') {
+                let app = app.trim();
+                let hint = hint.trim().trim_matches('"');
+                if !hint.is_empty() && need.iter().any(|a| a == app) {
+                    let _ = db::hints::save_hint(&conn, app, hint);
+                }
+            }
+        }
+        tracing::info!("Generated hints for: {}", app_list);
+    }
 }
 
 #[tauri::command]
@@ -445,13 +539,27 @@ pub fn run() {
         .setup(|app| {
             setup_tray(app)?;
 
-            // Check accessibility permission on startup
+            // Start background hint generator
+            let hint_res: SharedResources = app.state::<SharedResources>().inner().clone();
+            std::thread::spawn(move || {
+                // Wait for Tauri runtime to be ready
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                tauri::async_runtime::spawn(async move {
+                    start_hint_generator(hint_res).await;
+                });
+            });
+
+            // Poll accessibility permission until granted
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_secs(2));
-                if !inject::clipboard::check_accessibility() {
-                    tracing::warn!("Accessibility permission not granted — text paste will fail");
+                loop {
+                    if inject::clipboard::check_accessibility() {
+                        let _ = handle.emit("accessibility_granted", ());
+                        break;
+                    }
                     let _ = handle.emit("accessibility_missing", ());
+                    std::thread::sleep(std::time::Duration::from_secs(3));
                 }
             });
 
@@ -485,7 +593,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             check_models, download_models, load_models,
             start_listening, stop_listening,
-            get_app_state, get_active_app_info,
+            get_app_state, open_accessibility_settings, get_active_app_info,
+            get_hint,
             add_dictionary_word, get_dictionary,
             toggle_polish, get_polish_enabled,
             list_mics, set_mic, get_mic,
