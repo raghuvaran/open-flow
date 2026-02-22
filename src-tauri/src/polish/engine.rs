@@ -25,6 +25,11 @@ impl PolishEngine {
     }
 
     fn find_llama_server() -> Option<String> {
+        // Check our bundled copy first
+        let bundled = crate::config::AppConfig::default()
+            .models_dir.join("llama-server");
+        if bundled.exists() { return Some(bundled.to_string_lossy().into()); }
+
         let candidates = [
             "/opt/homebrew/bin/llama-server",
             "/usr/local/bin/llama-server",
@@ -32,7 +37,6 @@ impl PolishEngine {
         for p in candidates {
             if std::path::Path::new(p).exists() { return Some(p.to_string()); }
         }
-        // Fall back to PATH lookup
         Command::new("which").arg("llama-server")
             .output().ok()
             .and_then(|o| String::from_utf8(o.stdout).ok())
@@ -49,8 +53,13 @@ impl PolishEngine {
             }
         }
 
+        // Kill any orphaned llama-server on our port from a previous crash
+        let _ = Command::new("sh")
+            .args(["-c", &format!("lsof -ti tcp:{} | xargs kill -9 2>/dev/null", self.port)])
+            .status();
+
         let bin = Self::find_llama_server()
-            .ok_or_else(|| anyhow::anyhow!("llama-server not found. Install: brew install llama.cpp"))?;
+            .ok_or_else(|| anyhow::anyhow!("llama-server not found"))?;
 
         tracing::info!("Starting llama-server on port {}...", self.port);
         let child = Command::new(&bin)
