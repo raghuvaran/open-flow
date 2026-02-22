@@ -64,35 +64,55 @@ Everything runs on your Mac. The 15 MB app auto-downloads ~2 GB of models on fir
 
 ## Requirements
 
-- macOS 11.0+
-- [llama.cpp](https://github.com/ggerganov/llama.cpp) installed (`brew install llama.cpp`)
+- macOS 11.0+ (Apple Silicon or Intel)
 - ~2.5 GB disk space for models
 - Microphone permission
 - Accessibility permission (for text paste)
 
 ## Install
 
+### Download (recommended)
+
+1. Go to [Releases](https://github.com/raghuvaran/open-flow/releases/latest)
+2. Download the `.dmg` file
+3. Open the `.dmg` and drag OpenFlow to `/Applications`
+
 ### From Source
 
 ```bash
-# Prerequisites
-brew install llama.cpp
 rustup target add aarch64-apple-darwin  # if on Apple Silicon
 
-# Build
 npm install
 MACOSX_DEPLOYMENT_TARGET=11.0 npm run tauri build
 
-# Copy to Applications
 cp -R src-tauri/target/release/bundle/macos/OpenFlow.app /Applications/
 ```
+
+### macOS Gatekeeper Notice
+
+Since OpenFlow is not yet code-signed with Apple, macOS will show **"OpenFlow Not Opened"** on first launch. To fix this:
+
+**Option A — Terminal (quickest):**
+```bash
+xattr -cr /Applications/OpenFlow.app
+```
+
+**Option B — System Settings:**
+1. Try to open OpenFlow (you'll see the warning — click **Done**, not "Move to Trash")
+2. Open **System Settings → Privacy & Security**
+3. Scroll down — you'll see *"OpenFlow was blocked"* with an **Open Anyway** button
+4. Click **Open Anyway** and authenticate
+
+> **Note:** On macOS Sequoia (15+), the old right-click → Open workaround no longer works. Use one of the methods above.
+
+Once opened the first time, macOS will remember your choice.
 
 ### First Launch
 
 1. Open OpenFlow from Spotlight or `/Applications`
 2. Grant **Microphone** access when prompted
-3. Go to **System Settings → Privacy & Security → Accessibility** → add OpenFlow
-4. Models download automatically (~2 GB, takes a few minutes)
+3. Click the **⚠ Enable Accessibility →** link in the pill (opens System Settings directly), then add OpenFlow
+4. Models and llama-server download automatically (~2 GB, takes a few minutes)
 5. Pill shows "Ready" — you're good to go
 
 ## Usage
