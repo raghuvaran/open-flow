@@ -104,9 +104,9 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
         .id("show").build(app)?;
     let polish_item = CheckMenuItemBuilder::new("AI Polish")
         .id("polish").checked(polish_on).build(app)?;
-    let walkie_item = CheckMenuItemBuilder::new("Walkie-Talkie Mode")
+    let walkie_item = CheckMenuItemBuilder::new("Walkie-Talkie")
         .id("walkie").checked(walkie_on).build(app)?;
-    let autostart_item = CheckMenuItemBuilder::new("Start on Login")
+    let autostart_item = CheckMenuItemBuilder::new("Launch at Login")
         .id("autostart").checked(autostart_on).build(app)?;
 
     let default_mic = CheckMenuItemBuilder::new("Default")
@@ -144,7 +144,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
         ("65%", 0.65), ("75%", 0.75), ("90%", 0.90),
     ];
 
-    let mut color_sub = SubmenuBuilder::new(app, "Pill Color");
+    let mut color_sub = SubmenuBuilder::new(app, "Appearance");
     let mut color_items = Vec::new();
     for (name, rgba) in &presets {
         let checked = *rgba == saved_color.as_str();
@@ -173,6 +173,30 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
 
     let color_menu = color_sub.build()?;
 
+    // Shortcut submenu
+    let saved_shortcut = conn.as_ref()
+        .and_then(|c| settings::get(c, "shortcut").ok().flatten())
+        .unwrap_or_else(|| "ctrl+shift+space".to_string());
+
+    let shortcut_presets = [
+        ("Ctrl+Shift+Space", "ctrl+shift+space"),
+        ("Ctrl+Shift+S",     "ctrl+shift+s"),
+        ("Ctrl+Shift+D",     "ctrl+shift+d"),
+        ("Cmd+Shift+Space",  "super+shift+space"),
+        ("Cmd+Shift+S",      "super+shift+s"),
+        ("Option+Space",     "alt+space"),
+    ];
+    let mut shortcut_sub = SubmenuBuilder::new(app, "Shortcut");
+    let mut shortcut_items = Vec::new();
+    for (label, key) in &shortcut_presets {
+        let checked = *key == saved_shortcut.as_str();
+        let item = CheckMenuItemBuilder::new(*label)
+            .id(format!("shortcut__{}", key)).checked(checked).build(app)?;
+        shortcut_items.push(item.clone());
+        shortcut_sub = shortcut_sub.item(&item);
+    }
+    let shortcut_menu = shortcut_sub.build()?;
+
     let menu = MenuBuilder::new(app)
         .item(&show_item)
         .separator()
@@ -181,6 +205,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
         .item(&autostart_item)
         .item(&mic_menu)
         .item(&color_menu)
+        .item(&shortcut_menu)
         .separator()
         .item(&quit_item)
         .build()?;
@@ -252,6 +277,40 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
                             let _ = app.emit("pill_color_changed", &new_rgba);
                         }
                     }
+                }
+                _ if id.starts_with("shortcut__") => {
+                    let new_key = id[10..].to_string();
+                    for item in &shortcut_items { let _ = item.set_checked(item.id().0.as_str() == id); }
+                    let cfg = AppConfig::default();
+                    if let Ok(c) = schema::init_db(&cfg.db_path) {
+                        let _ = settings::set(&c, "shortcut", &new_key);
+                    }
+                    // Re-register the global shortcut
+                    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+                    let _ = app.global_shortcut().unregister_all();
+                    let handle = app.clone();
+                    let _ = app.global_shortcut().on_shortcut(new_key.as_str(), move |_app, _shortcut, event| {
+                        use tauri_plugin_global_shortcut::ShortcutState;
+                        let h = handle.clone();
+                        match event.state {
+                            ShortcutState::Pressed => {
+                                tauri::async_runtime::spawn(async move {
+                                    if WALKIE_TALKIE.load(Ordering::Relaxed) {
+                                        let _ = h.emit("walkie_press", ());
+                                    } else {
+                                        let _ = h.emit("toggle_listening", ());
+                                    }
+                                });
+                            }
+                            ShortcutState::Released => {
+                                if WALKIE_TALKIE.load(Ordering::Relaxed) {
+                                    tauri::async_runtime::spawn(async move {
+                                        let _ = h.emit("walkie_release", ());
+                                    });
+                                }
+                            }
+                        }
+                    });
                 }
                 _ => {}
             }
@@ -769,7 +828,13 @@ pub fn run() {
 
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
             let app_handle = app.handle().clone();
-            app.global_shortcut().on_shortcut("ctrl+shift+space", move |_app, _shortcut, event| {
+            let saved_shortcut = {
+                let cfg = AppConfig::default();
+                schema::init_db(&cfg.db_path).ok()
+                    .and_then(|c| settings::get(&c, "shortcut").ok().flatten())
+                    .unwrap_or_else(|| "ctrl+shift+space".to_string())
+            };
+            app.global_shortcut().on_shortcut(saved_shortcut.as_str(), move |_app, _shortcut, event| {
                 use tauri_plugin_global_shortcut::ShortcutState;
                 let handle = app_handle.clone();
                 match event.state {
