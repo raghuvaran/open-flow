@@ -17,6 +17,35 @@
   let hintTimer;
   let hintText = $state("");
   let hintVisible = $state(false);
+  let statsText = $state("");
+  let statsVisible = $state(false);
+
+  let pillColor = $state("#12121e");
+  let pillOpacity = $state(0.44);
+
+  function hexToRgba(hex, alpha) {
+    const r = parseInt(hex.slice(1,3), 16);
+    const g = parseInt(hex.slice(3,5), 16);
+    const b = parseInt(hex.slice(5,7), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
+  function pillBg() { return hexToRgba(pillColor, pillOpacity); }
+
+  function parseRgba(s) {
+    const m = s.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),?\s*([\d.]*)\)/);
+    if (m) {
+      pillColor = "#" + [m[1],m[2],m[3]].map(x => parseInt(x).toString(16).padStart(2,"0")).join("");
+      pillOpacity = m[4] ? parseFloat(m[4]) : 1;
+    }
+  }
+
+  async function loadPillColor() {
+    try {
+      const saved = await invoke("get_pill_color");
+      if (saved) parseRgba(saved);
+    } catch {}
+  }
 
   function startHintPolling() {
     clearInterval(hintTimer);
@@ -141,11 +170,20 @@
     } catch {}
 
     await win.onMoved(onMoved);
+    await loadPillColor();
 
     document.addEventListener("pointerleave", () => { hovered = false; });
 
     await listen("audio_level", (e) => updateBars(e.payload));
     await listen("pipeline_state", (e) => { processing = e.payload === "processing"; });
+    await listen("dictation_stats", (e) => {
+      const { words, seconds } = e.payload;
+      if (words > 0) {
+        statsText = `${words} words in ${seconds}s`;
+        statsVisible = true;
+        setTimeout(() => { statsVisible = false; statsText = ""; }, 3500);
+      }
+    });
     await listen("accessibility_missing", () => { if (!accessHint) accessWarning = true; });
     await listen("accessibility_granted", () => { accessWarning = false; accessHint = false; });
 
@@ -184,6 +222,7 @@
     });
 
     await listen("show_window", async () => { await showWidget(); });
+    await listen("pill_color_changed", (e) => { parseRgba(e.payload); });
 
     await listen("mic_changed", async () => {
       if (phase === "listening") {
@@ -212,9 +251,10 @@
 
 <main>
   <div class="pill" class:listening={phase === "listening"} class:processing
+    style="background: {pillBg()};"
     onpointerenter={() => hovered = true}
     onpointerleave={() => hovered = false}
-    onmousedown={(e) => { if (e.target.closest('button')) return; getCurrentWindow().startDragging(); }}>
+    onmousedown={(e) => { if (e.target.closest('button') || e.target.closest('.settings-panel')) return; getCurrentWindow().startDragging(); }}>
 
     <button class="mic-btn" onclick={toggle} disabled={phase === "init" || phase === "loading"}>
       {#if phase === "listening"}
@@ -236,7 +276,7 @@
     {#if processing}<div class="proc-dot"></div>{/if}
 
     <span class="label">
-      {#if accessHint && phase === "ready"}<span class="access-hint">Click + → add OpenFlow → toggle on</span>{:else if accessWarning && phase === "ready"}<span class="access-link" onclick={() => { invoke("open_accessibility_settings"); accessWarning = false; accessHint = true; }}>⚠ Enable Accessibility →</span>{:else if processing}Processing{:else if hintText && hintVisible && phase === "ready"}<span class="hint" class:hint-visible={hintVisible}>{hintText}</span>{:else}{statusMsg}{/if}
+      {#if accessHint && phase === "ready"}<span class="access-hint">Find OpenFlow in the list → toggle on</span>{:else if accessWarning && phase === "ready"}<span class="access-link" onclick={() => { invoke("open_accessibility_settings"); accessWarning = false; accessHint = true; }}>⚠ Enable Accessibility →</span>{:else if processing}Processing{:else if statsVisible && statsText}<span class="hint hint-visible">{statsText}</span>{:else if hintText && hintVisible && phase === "ready"}<span class="hint" class:hint-visible={hintVisible}>{hintText}</span>{:else}{statusMsg}{/if}
     </span>
 
     {#if hovered}
@@ -258,17 +298,17 @@
   }
   main {
     display: flex; flex-direction: column; align-items: center;
-    padding: 8px 10px;
+    padding: 0;
   }
   .pill {
     display: flex; align-items: center; gap: 8px;
     padding: 6px 12px 6px 6px;
     background: rgba(18, 18, 30, 0.44);
-    backdrop-filter: blur(24px) saturate(180%);
-    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
     border: 1px solid rgba(255,255,255,0.07);
     border-radius: 22px;
-    box-shadow: 0 2px 20px rgba(0,0,0,0.45), 0 0 0 0.5px rgba(255,255,255,0.05);
+    box-shadow: none;
     transition: border-color 0.3s, box-shadow 0.3s;
     position: relative;
     cursor: grab;

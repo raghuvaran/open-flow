@@ -15,13 +15,14 @@
       {
         "title": "OpenFlow",
         "width": 300,
-        "height": 56,
+        "height": 44,
         "resizable": false,
         "visible": true,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
-        "skipTaskbar": true
+        "skipTaskbar": true,
+        "shadow": false
       }
     ],
     "security": {

@@ -41,8 +41,14 @@ impl Orchestrator {
                         let handle = app_handle.clone();
                         let _ = handle.emit("pipeline_state", "processing");
                         pending = Some(tokio::task::spawn_blocking(move || {
-                            if let Err(e) = process_segment(&asr, polish.as_deref(), &audio) {
-                                tracing::error!("Pipeline error: {}", e);
+                            match process_segment(&asr, polish.as_deref(), &audio) {
+                                Ok((words, secs)) if words > 0 => {
+                                    let _ = handle.emit("dictation_stats", serde_json::json!({
+                                        "words": words, "seconds": (secs * 10.0).round() / 10.0
+                                    }));
+                                }
+                                Err(e) => tracing::error!("Pipeline error: {}", e),
+                                _ => {}
                             }
                             let _ = handle.emit("pipeline_state", "idle");
                         }));
@@ -60,20 +66,20 @@ impl Orchestrator {
     }
 }
 
-fn process_segment(asr: &AsrEngine, polish: Option<&PolishEngine>, audio: &[f32]) -> Result<()> {
+fn process_segment(asr: &AsrEngine, polish: Option<&PolishEngine>, audio: &[f32]) -> Result<(usize, f64)> {
     let start = std::time::Instant::now();
 
     let raw_text = asr.transcribe(audio)?;
     tracing::info!("ASR ({:?}): {}", start.elapsed(), &raw_text);
 
     if raw_text.is_empty() || raw_text.starts_with('[') || raw_text.starts_with('(') {
-        return Ok(());
+        return Ok((0, 0.0));
     }
 
     let cmd = commands::parse_command(&raw_text);
     if let Some(text) = commands::command_text(&cmd) {
         clipboard::inject_text(text)?;
-        return Ok(());
+        return Ok((0, 0.0));
     }
 
     let use_polish = POLISH_ENABLED.load(Ordering::Relaxed);
@@ -91,9 +97,11 @@ fn process_segment(asr: &AsrEngine, polish: Option<&PolishEngine>, audio: &[f32]
             }
         }
         (VoiceCommand::None(text), _) => text.clone(),
-        _ => return Ok(()),
+        _ => return Ok((0, 0.0)),
     };
 
+    let word_count = final_text.split_whitespace().count();
+    let elapsed = start.elapsed().as_secs_f64();
     tracing::info!("Total pipeline ({:?}): {}", start.elapsed(), &final_text);
     clipboard::inject_text(&final_text)?;
 
@@ -107,5 +115,5 @@ fn process_segment(asr: &AsrEngine, polish: Option<&PolishEngine>, audio: &[f32]
         std::sync::atomic::Ordering::Relaxed,
     );
 
-    Ok(())
+    Ok((word_count, elapsed))
 }

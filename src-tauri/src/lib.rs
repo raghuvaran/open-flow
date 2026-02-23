@@ -124,6 +124,55 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     let quit_item = MenuItemBuilder::new("Quit OpenFlow")
         .id("quit").accelerator("CmdOrCtrl+Q").build(app)?;
 
+    // Pill color submenu
+    let saved_color = conn.as_ref()
+        .and_then(|c| settings::get(c, "pill_color").ok().flatten())
+        .unwrap_or_else(|| "rgba(18, 18, 30, 0.44)".to_string());
+
+    let presets = [
+        ("Dark (Default)", "rgba(18, 18, 30, 0.44)"),
+        ("Charcoal",       "rgba(40, 40, 50, 0.55)"),
+        ("Midnight Blue",  "rgba(15, 23, 42, 0.55)"),
+        ("Deep Teal",      "rgba(13, 42, 48, 0.55)"),
+        ("Slate",          "rgba(51, 65, 85, 0.50)"),
+        ("Graphite",       "rgba(55, 55, 55, 0.50)"),
+        ("Warm Dark",      "rgba(45, 30, 20, 0.50)"),
+        ("Frosted White",  "rgba(240, 240, 245, 0.35)"),
+    ];
+    let opacities = [
+        ("25%", 0.25), ("35%", 0.35), ("50%", 0.50),
+        ("65%", 0.65), ("75%", 0.75), ("90%", 0.90),
+    ];
+
+    let mut color_sub = SubmenuBuilder::new(app, "Pill Color");
+    let mut color_items = Vec::new();
+    for (name, rgba) in &presets {
+        let checked = *rgba == saved_color.as_str();
+        let item = CheckMenuItemBuilder::new(*name)
+            .id(format!("color__{}", rgba)).checked(checked).build(app)?;
+        color_items.push(item.clone());
+        color_sub = color_sub.item(&item);
+    }
+
+    // Parse current opacity from saved color
+    let current_opacity = saved_color.split(',').last()
+        .and_then(|s| s.trim().trim_end_matches(')').parse::<f64>().ok())
+        .unwrap_or(0.44);
+
+    let mut opacity_sub = SubmenuBuilder::new(app, "Opacity");
+    let mut opacity_items = Vec::new();
+    for (label, val) in &opacities {
+        let checked = (current_opacity - val).abs() < 0.03;
+        let item = CheckMenuItemBuilder::new(*label)
+            .id(format!("opacity__{}", val)).checked(checked).build(app)?;
+        opacity_items.push(item.clone());
+        opacity_sub = opacity_sub.item(&item);
+    }
+    let opacity_menu = opacity_sub.build()?;
+    color_sub = color_sub.separator().item(&opacity_menu);
+
+    let color_menu = color_sub.build()?;
+
     let menu = MenuBuilder::new(app)
         .item(&show_item)
         .separator()
@@ -131,6 +180,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
         .item(&walkie_item)
         .item(&autostart_item)
         .item(&mic_menu)
+        .item(&color_menu)
         .separator()
         .item(&quit_item)
         .build()?;
@@ -147,6 +197,10 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
             match id {
                 "quit" => { std::process::exit(0); }
                 "show" => { let _ = app.emit("show_window", ()); }
+                "pill_color" => {
+                    let _ = app.emit("show_window", ());
+                    let _ = app.emit("toggle_settings", ());
+                }
                 "polish" => {
                     let current = POLISH_ENABLED.load(Ordering::Relaxed);
                     POLISH_ENABLED.store(!current, Ordering::Relaxed);
@@ -174,6 +228,30 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
                         let _ = settings::set(&c, "mic_device", &name);
                     }
                     let _ = app.emit("mic_changed", ());
+                }
+                _ if id.starts_with("color__") => {
+                    let rgba = id[7..].to_string();
+                    for item in &color_items { let _ = item.set_checked(item.id().0.as_str() == id); }
+                    let cfg = AppConfig::default();
+                    if let Ok(c) = schema::init_db(&cfg.db_path) {
+                        let _ = settings::set(&c, "pill_color", &rgba);
+                    }
+                    let _ = app.emit("pill_color_changed", &rgba);
+                }
+                _ if id.starts_with("opacity__") => {
+                    let new_opacity: f64 = id[9..].parse().unwrap_or(0.44);
+                    for item in &opacity_items { let _ = item.set_checked(item.id().0.as_str() == id); }
+                    // Read current color, replace opacity
+                    let cfg = AppConfig::default();
+                    if let Ok(c) = schema::init_db(&cfg.db_path) {
+                        let current = settings::get(&c, "pill_color").ok().flatten()
+                            .unwrap_or_else(|| "rgba(18, 18, 30, 0.44)".to_string());
+                        if let Some(last_comma) = current.rfind(',') {
+                            let new_rgba = format!("{}, {})", &current[..last_comma], new_opacity);
+                            let _ = settings::set(&c, "pill_color", &new_rgba);
+                            let _ = app.emit("pill_color_changed", &new_rgba);
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -405,6 +483,20 @@ async fn get_window_pos(res: tauri::State<'_, SharedResources>) -> Result<serde_
 }
 
 #[tauri::command]
+async fn set_pill_color(res: tauri::State<'_, SharedResources>, color: String) -> Result<(), String> {
+    let r = res.lock().await;
+    let conn = schema::init_db(&r.config.db_path).map_err(|e| e.to_string())?;
+    settings::set(&conn, "pill_color", &color).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_pill_color(res: tauri::State<'_, SharedResources>) -> Result<Option<String>, String> {
+    let r = res.lock().await;
+    let conn = schema::init_db(&r.config.db_path).map_err(|e| e.to_string())?;
+    settings::get(&conn, "pill_color").map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn get_app_state(res: tauri::State<'_, SharedResources>) -> Result<String, String> {
     let r = res.lock().await;
     Ok(serde_json::to_string(&r.state.phase).unwrap_or_else(|_| format!("{:?}", r.state.phase)))
@@ -432,14 +524,53 @@ async fn get_active_app_info() -> Result<String, String> {
 async fn get_hint() -> Result<String, String> {
     let config = AppConfig::default();
     let conn = schema::init_db(&config.db_path).map_err(|e| e.to_string())?;
-    // Return a random hint from today's cache
-    let hint: Option<String> = conn.prepare(
-        "SELECT hint FROM hint_cache WHERE generated_date = date('now') ORDER BY RANDOM() LIMIT 1"
+
+    // Weighted random: 50% hints, 25% mood, 25% affirmations
+    let roll: u8 = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap_or_default()
+        .subsec_nanos() % 4) as u8;
+
+    let query = match roll {
+        0 => {
+            // Mood: pick one matching current time bracket
+            let hour: u32 = conn.query_row(
+                "SELECT CAST(strftime('%H', 'now', 'localtime') AS INTEGER)", [],
+                |row| row.get(0)
+            ).unwrap_or(12);
+            let bracket = match hour {
+                6..=8 => "early", 9..=11 => "morning", 12..=16 => "afternoon",
+                17..=20 => "evening", 21..=23 => "night", _ => "late",
+            };
+            format!(
+                "SELECT hint FROM hint_cache WHERE app_name = '__mood_{}' AND generated_date = date('now') LIMIT 1",
+                bracket
+            )
+        }
+        1 => {
+            // Affirmation
+            "SELECT hint FROM hint_cache WHERE app_name LIKE '__affirm_%' AND generated_date = date('now') ORDER BY RANDOM() LIMIT 1".to_string()
+        }
+        _ => {
+            // Regular hint
+            "SELECT hint FROM hint_cache WHERE app_name NOT LIKE '__%' AND generated_date = date('now') ORDER BY RANDOM() LIMIT 1".to_string()
+        }
+    };
+
+    let hint: Option<String> = conn.prepare(&query)
+        .and_then(|mut s| {
+            let mut rows = s.query_map([], |row| row.get::<_, String>(0))?;
+            Ok(rows.next().and_then(|r| r.ok()))
+        }).unwrap_or(None);
+
+    // Fallback to any hint if the chosen category is empty
+    if hint.is_some() { return Ok(hint.unwrap()); }
+    let fallback: Option<String> = conn.prepare(
+        "SELECT hint FROM hint_cache WHERE generated_date = date('now') AND app_name NOT LIKE '__%' ORDER BY RANDOM() LIMIT 1"
     ).and_then(|mut s| {
         let mut rows = s.query_map([], |row| row.get::<_, String>(0))?;
         Ok(rows.next().and_then(|r| r.ok()))
     }).unwrap_or(None);
-    Ok(hint.unwrap_or_default())
+    Ok(fallback.unwrap_or_default())
 }
 
 async fn start_hint_generator(res: SharedResources) {
@@ -464,18 +595,24 @@ async fn generate_hints(res: &SharedResources) {
         Ok(c) => c, Err(_) => return,
     };
 
-    // Use top apps from history, or seed with common apps on first run
     let mut apps = db::hints::top_apps(&conn, 5).unwrap_or_default();
     if apps.is_empty() {
         apps = vec!["Safari", "Chrome", "Slack", "VS Code", "Notes"]
             .into_iter().map(String::from).collect();
     }
 
-    // Skip if all apps already have today's hints
-    let need: Vec<_> = apps.iter()
+    let need_hints: Vec<_> = apps.iter()
         .filter(|a| db::hints::get_hint(&conn, a).ok().flatten().is_none())
         .cloned().collect();
-    if need.is_empty() { return; }
+    let need_mood = db::hints::get_hint(&conn, "__mood__").ok().flatten().is_none();
+    let need_affirm: Vec<_> = apps.iter()
+        .filter(|a| {
+            let key = format!("__affirm_{}", a);
+            db::hints::get_hint(&conn, &key).ok().flatten().is_none()
+        })
+        .cloned().collect();
+
+    if need_hints.is_empty() && !need_mood && need_affirm.is_empty() { return; }
 
     let polish = {
         let r = res.lock().await;
@@ -485,35 +622,76 @@ async fn generate_hints(res: &SharedResources) {
         Some(e) => e, None => return,
     };
 
-    let app_list = need.join(", ");
-    let prompt = format!(
-        "Generate a short, subtle voice dictation hint (max 6 words) for each app. \
-         The hint should remind the user they can dictate instead of typing. \
-         Be creative, varied, not generic. One hint per line, format: AppName: hint\n\nApps: {}",
-        app_list
-    );
+    // Build a single combined prompt
+    let mut sections = Vec::new();
 
+    if !need_hints.is_empty() {
+        sections.push(format!(
+            "HINTS: One voice dictation hint (max 6 words) per app. Format: AppName: hint\nApps: {}",
+            need_hints.join(", ")
+        ));
+    }
+
+    if need_mood {
+        sections.push(
+            "MOOD: Generate 6 time-of-day mood texts (max 4 words each). Calm, observational tone. \
+             Format: morning: text, afternoon: text, evening: text, night: text, late: text, early: text".to_string()
+        );
+    }
+
+    if !need_affirm.is_empty() {
+        sections.push(format!(
+            "AFFIRMATIONS: One calm, observational acknowledgment (3-5 words, no emoji, no exclamation) per app. \
+             Format: AppName: text\nApps: {}",
+            need_affirm.join(", ")
+        ));
+    }
+
+    let prompt = sections.join("\n\n");
+    let engine_clone = engine.clone();
     let result = tokio::task::spawn_blocking(move || {
-        engine.generate("You write ultra-concise UI microcopy.", &prompt, 128)
+        engine_clone.generate("You write ultra-concise UI microcopy. Be subtle, never cheerful.", &prompt, 256)
     }).await;
 
     if let Ok(Ok(text)) = result {
+        let mut section = "";
         for line in text.lines() {
-            if let Some((app, hint)) = line.split_once(':') {
-                let app = app.trim();
-                let hint = hint.trim().trim_matches('"');
-                if !hint.is_empty() && need.iter().any(|a| a == app) {
-                    let _ = db::hints::save_hint(&conn, app, hint);
+            let trimmed = line.trim();
+            if trimmed.starts_with("HINTS") { section = "hints"; continue; }
+            if trimmed.starts_with("MOOD") { section = "mood"; continue; }
+            if trimmed.starts_with("AFFIRMATION") { section = "affirm"; continue; }
+
+            if let Some((key, val)) = trimmed.split_once(':') {
+                let key = key.trim();
+                let val = val.trim().trim_matches('"');
+                if val.is_empty() { continue; }
+
+                match section {
+                    "hints" if need_hints.iter().any(|a| a == key) => {
+                        let _ = db::hints::save_hint(&conn, key, val);
+                    }
+                    "mood" => {
+                        let tag = format!("__mood_{}", key);
+                        let _ = db::hints::save_hint(&conn, &tag, val);
+                    }
+                    "affirm" if need_affirm.iter().any(|a| a == key) => {
+                        let tag = format!("__affirm_{}", key);
+                        let _ = db::hints::save_hint(&conn, &tag, val);
+                    }
+                    // If no section header, try to match as hint (backward compat)
+                    "" if need_hints.iter().any(|a| a == key) => {
+                        let _ = db::hints::save_hint(&conn, key, val);
+                    }
+                    _ => {}
                 }
             }
         }
-        tracing::info!("Generated hints for: {}", app_list);
+        tracing::info!("Generated hints/mood/affirmations");
     }
 }
 
 #[tauri::command]
-async fn add_dictionary_word(spoken: String, written: String) -> Result<(), String> {
-    let config = AppConfig::default();
+async fn add_dictionary_word(spoken: String, written: String) -> Result<(), String> {    let config = AppConfig::default();
     let conn = schema::init_db(&config.db_path).map_err(|e| e.to_string())?;
     db::dictionary::add(&conn, &spoken, &written, "general").map_err(|e| e.to_string())
 }
@@ -620,6 +798,7 @@ pub fn run() {
             check_models, download_models, load_models,
             start_listening, stop_listening,
             get_app_state, open_accessibility_settings, check_accessibility_cmd, get_active_app_info,
+            set_pill_color, get_pill_color,
             get_hint,
             add_dictionary_word, get_dictionary,
             toggle_polish, get_polish_enabled,
