@@ -38,3 +38,63 @@ pub fn save_hint(conn: &Connection, app_name: &str, hint: &str) -> Result<()> {
     )?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::schema;
+
+    fn test_db() -> Connection {
+        schema::init_db(std::path::Path::new(":memory:")).unwrap()
+    }
+
+    #[test]
+    fn save_and_get_hint() {
+        let conn = test_db();
+        save_hint(&conn, "Slack", "Try voice commands").unwrap();
+        let h = get_hint(&conn, "Slack").unwrap();
+        assert_eq!(h, Some("Try voice commands".into()));
+    }
+
+    #[test]
+    fn get_hint_missing() {
+        let conn = test_db();
+        assert_eq!(get_hint(&conn, "NoApp").unwrap(), None);
+    }
+
+    #[test]
+    fn save_hint_overwrites_same_day() {
+        let conn = test_db();
+        save_hint(&conn, "App", "hint1").unwrap();
+        save_hint(&conn, "App", "hint2").unwrap();
+        assert_eq!(get_hint(&conn, "App").unwrap(), Some("hint2".into()));
+    }
+
+    #[test]
+    fn record_usage_and_top_apps() {
+        let conn = test_db();
+        for _ in 0..5 { record_usage(&conn, "Slack").unwrap(); }
+        for _ in 0..3 { record_usage(&conn, "Safari").unwrap(); }
+        record_usage(&conn, "Notes").unwrap();
+        let top = top_apps(&conn, 2).unwrap();
+        assert_eq!(top.len(), 2);
+        assert_eq!(top[0], "Slack");
+        assert_eq!(top[1], "Safari");
+    }
+
+    #[test]
+    fn top_apps_excludes_unknown() {
+        let conn = test_db();
+        record_usage(&conn, "Unknown").unwrap();
+        record_usage(&conn, "Slack").unwrap();
+        let top = top_apps(&conn, 10).unwrap();
+        assert!(!top.contains(&"Unknown".into()));
+        assert!(top.contains(&"Slack".into()));
+    }
+
+    #[test]
+    fn top_apps_empty() {
+        let conn = test_db();
+        assert!(top_apps(&conn, 5).unwrap().is_empty());
+    }
+}

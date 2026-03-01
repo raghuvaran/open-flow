@@ -34,3 +34,38 @@ impl AppState {
         self.phase = Phase::Idle;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn initial_state_is_idle() {
+        let s = AppState::new();
+        assert_eq!(s.phase, Phase::Idle);
+    }
+
+    #[test]
+    fn phase_transitions() {
+        let mut s = AppState::new();
+        s.set_listening();
+        assert_eq!(s.phase, Phase::Listening);
+        s.set_processing();
+        assert_eq!(s.phase, Phase::Processing);
+        s.set_injecting();
+        assert_eq!(s.phase, Phase::Injecting);
+        s.set_idle();
+        assert_eq!(s.phase, Phase::Idle);
+    }
+
+    #[test]
+    fn can_go_idle_from_any_state() {
+        let mut s = AppState::new();
+        s.set_listening();
+        s.set_idle();
+        assert_eq!(s.phase, Phase::Idle);
+        s.set_processing();
+        s.set_idle();
+        assert_eq!(s.phase, Phase::Idle);
+    }
+}

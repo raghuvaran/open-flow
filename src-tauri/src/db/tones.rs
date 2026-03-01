@@ -16,3 +16,34 @@ pub fn set_tone(conn: &Connection, bundle_id: &str, app_name: &str, category: &s
     )?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::schema;
+
+    fn test_db() -> Connection {
+        schema::init_db(std::path::Path::new(":memory:")).unwrap()
+    }
+
+    #[test]
+    fn set_and_get_tone() {
+        let conn = test_db();
+        set_tone(&conn, "com.apple.mail", "Mail", "email", "Professional tone").unwrap();
+        assert_eq!(get_tone(&conn, "com.apple.mail").unwrap(), Some("Professional tone".into()));
+    }
+
+    #[test]
+    fn get_tone_missing() {
+        let conn = test_db();
+        assert_eq!(get_tone(&conn, "com.unknown").unwrap(), None);
+    }
+
+    #[test]
+    fn set_tone_overwrites() {
+        let conn = test_db();
+        set_tone(&conn, "com.slack", "Slack", "slack", "Casual").unwrap();
+        set_tone(&conn, "com.slack", "Slack", "slack", "Very casual").unwrap();
+        assert_eq!(get_tone(&conn, "com.slack").unwrap(), Some("Very casual".into()));
+    }
+}

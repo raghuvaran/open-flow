@@ -21,3 +21,39 @@ pub fn add(conn: &Connection, spoken: &str, written: &str, category: &str) -> Re
     )?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::schema;
+
+    fn test_db() -> Connection {
+        schema::init_db(std::path::Path::new(":memory:")).unwrap()
+    }
+
+    #[test]
+    fn add_and_get_all() {
+        let conn = test_db();
+        add(&conn, "kubernetes", "Kubernetes", "general").unwrap();
+        add(&conn, "grpc", "gRPC", "general").unwrap();
+        let all = get_all(&conn).unwrap();
+        assert_eq!(all.len(), 2);
+        assert!(all[0].contains("kubernetes"));
+        assert!(all[0].contains("Kubernetes"));
+        assert!(all[1].contains("gRPC"));
+    }
+
+    #[test]
+    fn get_all_empty() {
+        let conn = test_db();
+        assert!(get_all(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn format_is_arrow() {
+        let conn = test_db();
+        add(&conn, "k8s", "Kubernetes", "tech").unwrap();
+        let all = get_all(&conn).unwrap();
+        assert_eq!(all[0], "k8s → Kubernetes");
+    }
+}

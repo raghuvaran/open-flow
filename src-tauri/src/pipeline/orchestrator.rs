@@ -66,7 +66,7 @@ impl Orchestrator {
     }
 }
 
-fn process_segment(asr: &AsrEngine, polish: Option<&PolishEngine>, audio: &[f32]) -> Result<(usize, f64)> {
+pub(crate) fn process_segment(asr: &AsrEngine, polish: Option<&PolishEngine>, audio: &[f32]) -> Result<(usize, f64)> {
     let start = std::time::Instant::now();
 
     let raw_text = asr.transcribe(audio)?;
@@ -116,4 +116,47 @@ fn process_segment(asr: &AsrEngine, polish: Option<&PolishEngine>, audio: &[f32]
     );
 
     Ok((word_count, elapsed))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AppConfig;
+
+    fn asr_model_path() -> std::path::PathBuf {
+        let cfg = AppConfig::default();
+        let base = cfg.models_dir.join("ggml-base.bin");
+        if base.exists() { base } else { cfg.models_dir.join("ggml-small.bin") }
+    }
+
+    #[test]
+    fn polish_enabled_flag_toggles() {
+        POLISH_ENABLED.store(true, Ordering::Relaxed);
+        assert!(POLISH_ENABLED.load(Ordering::Relaxed));
+        POLISH_ENABLED.store(false, Ordering::Relaxed);
+        assert!(!POLISH_ENABLED.load(Ordering::Relaxed));
+        POLISH_ENABLED.store(true, Ordering::Relaxed); // restore
+    }
+
+    #[test]
+    #[ignore] // requires ASR model
+    fn process_segment_silence_returns_zero() {
+        let asr = AsrEngine::new(&asr_model_path()).unwrap();
+        let silence = vec![0.0f32; 16000];
+        let (words, _) = process_segment(&asr, None, &silence).unwrap();
+        assert_eq!(words, 0);
+    }
+
+    #[test]
+    #[ignore] // requires ASR model
+    fn process_segment_without_polish() {
+        let asr = AsrEngine::new(&asr_model_path()).unwrap();
+        POLISH_ENABLED.store(false, Ordering::Relaxed);
+        // 2 seconds of tone — ASR will produce something (possibly noise text)
+        let audio: Vec<f32> = (0..32000).map(|i| (2.0 * std::f32::consts::PI * 200.0 * i as f32 / 16000.0).sin() * 0.5).collect();
+        let result = process_segment(&asr, None, &audio);
+        // Should not panic regardless of output
+        assert!(result.is_ok());
+        POLISH_ENABLED.store(true, Ordering::Relaxed);
+    }
 }

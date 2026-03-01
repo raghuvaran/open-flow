@@ -7,7 +7,7 @@ pub struct AudioCapture {
     stream: Option<Stream>,
 }
 
-fn resample(samples: &[f32], from_rate: u32) -> Vec<f32> {
+pub(crate) fn resample(samples: &[f32], from_rate: u32) -> Vec<f32> {
     if from_rate == 16000 { return samples.to_vec(); }
     let ratio = from_rate as f64 / 16000.0;
     let out_len = (samples.len() as f64 / ratio) as usize;
@@ -21,7 +21,7 @@ fn resample(samples: &[f32], from_rate: u32) -> Vec<f32> {
     }).collect()
 }
 
-fn to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
+pub(crate) fn to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
     if channels == 1 { return samples.to_vec(); }
     samples.chunks(channels as usize)
         .map(|ch| ch.iter().sum::<f32>() / channels as f32)
@@ -84,4 +84,66 @@ impl AudioCapture {
 
 impl Drop for AudioCapture {
     fn drop(&mut self) { self.stop(); }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resample_identity_at_16k() {
+        let input: Vec<f32> = (0..1600).map(|i| (i as f32 * 0.01).sin()).collect();
+        let out = resample(&input, 16000);
+        assert_eq!(out.len(), input.len());
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn resample_48k_to_16k() {
+        let input: Vec<f32> = vec![1.0; 4800]; // 100ms at 48kHz
+        let out = resample(&input, 48000);
+        assert_eq!(out.len(), 1600); // 100ms at 16kHz
+    }
+
+    #[test]
+    fn resample_44100_to_16k() {
+        let input: Vec<f32> = vec![0.5; 4410]; // 100ms at 44.1kHz
+        let out = resample(&input, 44100);
+        // 4410 / (44100/16000) = ~1600
+        assert!((out.len() as i32 - 1600).abs() <= 1);
+    }
+
+    #[test]
+    fn resample_preserves_value_range() {
+        let input: Vec<f32> = (0..4800).map(|i| (i as f32 * 0.1).sin()).collect();
+        let out = resample(&input, 48000);
+        for s in &out {
+            assert!(*s >= -1.0 && *s <= 1.0);
+        }
+    }
+
+    #[test]
+    fn to_mono_passthrough_single_channel() {
+        let input = vec![0.1, 0.2, 0.3];
+        let out = to_mono(&input, 1);
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn to_mono_stereo_averages() {
+        let input = vec![0.4, 0.6, 0.2, 0.8]; // 2 stereo frames
+        let out = to_mono(&input, 2);
+        assert_eq!(out.len(), 2);
+        assert!((out[0] - 0.5).abs() < 1e-6);
+        assert!((out[1] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn to_mono_multichannel() {
+        let input = vec![0.3, 0.3, 0.3, 0.6, 0.6, 0.6]; // 2 frames, 3 channels
+        let out = to_mono(&input, 3);
+        assert_eq!(out.len(), 2);
+        assert!((out[0] - 0.3).abs() < 1e-6);
+        assert!((out[1] - 0.6).abs() < 1e-6);
+    }
 }

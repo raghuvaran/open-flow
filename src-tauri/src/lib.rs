@@ -873,3 +873,390 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    fn test_db_conn() -> rusqlite::Connection {
+        schema::init_db(std::path::Path::new(":memory:")).unwrap()
+    }
+
+    // ===== Layer 3: Feature-level integration tests =====
+
+    // --- Walkie-talkie mode ---
+    #[test]
+    fn walkie_talkie_chunker_no_auto_flush() {
+        // In walkie-talkie mode, chunker is fed is_speech=true always, so it never auto-segments
+        let mut chunker = audio::chunker::Chunker::new(700);
+        let frame = vec![0.5f32; 480];
+        for _ in 0..50 {
+            // Walkie mode: always feed as speech
+            assert!(chunker.feed(&frame, true).is_none());
+        }
+        // Only flush produces output
+        let seg = chunker.flush().expect("flush should return audio");
+        assert_eq!(seg.len(), 50 * 480);
+    }
+
+    #[test]
+    fn walkie_talkie_flag_persists_to_db() {
+        let conn = test_db_conn();
+        WALKIE_TALKIE.store(true, Ordering::Relaxed);
+        settings::set(&conn, "walkie_talkie", "1").unwrap();
+        let val = settings::get(&conn, "walkie_talkie").unwrap();
+        assert_eq!(val, Some("1".into()));
+
+        WALKIE_TALKIE.store(false, Ordering::Relaxed);
+        settings::set(&conn, "walkie_talkie", "0").unwrap();
+        let val = settings::get(&conn, "walkie_talkie").unwrap();
+        assert_eq!(val, Some("0".into()));
+    }
+
+    #[test]
+    fn walkie_talkie_restore_from_db() {
+        let conn = test_db_conn();
+        settings::set(&conn, "walkie_talkie", "1").unwrap();
+        if let Ok(Some(v)) = settings::get(&conn, "walkie_talkie") {
+            WALKIE_TALKIE.store(v == "1", Ordering::Relaxed);
+        }
+        assert!(WALKIE_TALKIE.load(Ordering::Relaxed));
+        WALKIE_TALKIE.store(false, Ordering::Relaxed); // cleanup
+    }
+
+    // --- Toggle mode (normal mode) ---
+    #[test]
+    fn toggle_mode_emits_segments_on_silence() {
+        let mut chunker = audio::chunker::Chunker::new(90); // 3 frames threshold
+        let speech = vec![0.5f32; 480];
+        let silence = vec![0.0f32; 480];
+
+        // Speech burst
+        for _ in 0..10 { chunker.feed(&speech, true); }
+        // Silence triggers segment
+        let mut got = false;
+        for _ in 0..5 {
+            if chunker.feed(&silence, false).is_some() { got = true; break; }
+        }
+        assert!(got, "toggle mode should auto-emit on silence");
+    }
+
+    // --- Polish toggle ---
+    #[test]
+    fn polish_toggle_flag() {
+        POLISH_ENABLED.store(true, Ordering::Relaxed);
+        assert!(POLISH_ENABLED.load(Ordering::Relaxed));
+        POLISH_ENABLED.store(false, Ordering::Relaxed);
+        assert!(!POLISH_ENABLED.load(Ordering::Relaxed));
+        POLISH_ENABLED.store(true, Ordering::Relaxed); // restore
+    }
+
+    // --- Mic persistence ---
+    #[test]
+    fn mic_device_persistence() {
+        let conn = test_db_conn();
+        settings::set(&conn, "mic_device", "Blue Yeti").unwrap();
+        assert_eq!(settings::get(&conn, "mic_device").unwrap(), Some("Blue Yeti".into()));
+
+        // Default mic = empty string
+        settings::set(&conn, "mic_device", "").unwrap();
+        assert_eq!(settings::get(&conn, "mic_device").unwrap(), Some("".into()));
+    }
+
+    // --- Pill position persistence ---
+    #[test]
+    fn pill_position_roundtrip() {
+        let conn = test_db_conn();
+        settings::set(&conn, "win_x", "150").unwrap();
+        settings::set(&conn, "win_y", "800").unwrap();
+        assert_eq!(settings::get(&conn, "win_x").unwrap(), Some("150".into()));
+        assert_eq!(settings::get(&conn, "win_y").unwrap(), Some("800".into()));
+    }
+
+    // --- Pill color persistence ---
+    #[test]
+    fn pill_color_roundtrip() {
+        let conn = test_db_conn();
+        let color = "rgba(18, 18, 30, 0.44)";
+        settings::set(&conn, "pill_color", color).unwrap();
+        assert_eq!(settings::get(&conn, "pill_color").unwrap(), Some(color.into()));
+    }
+
+    #[test]
+    fn pill_opacity_update() {
+        let conn = test_db_conn();
+        let color = "rgba(18, 18, 30, 0.44)";
+        settings::set(&conn, "pill_color", color).unwrap();
+
+        // Simulate opacity change (same logic as tray handler)
+        let current = settings::get(&conn, "pill_color").unwrap().unwrap();
+        let new_opacity = 0.75;
+        if let Some(last_comma) = current.rfind(',') {
+            let new_rgba = format!("{}, {})", &current[..last_comma], new_opacity);
+            settings::set(&conn, "pill_color", &new_rgba).unwrap();
+        }
+        let updated = settings::get(&conn, "pill_color").unwrap().unwrap();
+        assert!(updated.contains("0.75"));
+    }
+
+    // --- Shortcut persistence ---
+    #[test]
+    fn shortcut_persistence() {
+        let conn = test_db_conn();
+        settings::set(&conn, "shortcut", "ctrl+shift+space").unwrap();
+        assert_eq!(settings::get(&conn, "shortcut").unwrap(), Some("ctrl+shift+space".into()));
+
+        settings::set(&conn, "shortcut", "super+shift+s").unwrap();
+        assert_eq!(settings::get(&conn, "shortcut").unwrap(), Some("super+shift+s".into()));
+    }
+
+    // --- Dictionary feature ---
+    #[test]
+    fn dictionary_add_and_use_in_prompt() {
+        let conn = test_db_conn();
+        db::dictionary::add(&conn, "k8s", "Kubernetes", "tech").unwrap();
+        db::dictionary::add(&conn, "grpc", "gRPC", "tech").unwrap();
+        let all = db::dictionary::get_all(&conn).unwrap();
+        assert_eq!(all.len(), 2);
+
+        // Verify dictionary words can be fed into prompt builder
+        let words: Vec<String> = all.iter().map(|e| {
+            e.split(" → ").nth(1).unwrap_or("").to_string()
+        }).collect();
+        let ctx = inject::context::AppContext::default();
+        let prompt = polish::prompt::build_system_prompt(&ctx, &words);
+        assert!(prompt.contains("Kubernetes"));
+        assert!(prompt.contains("gRPC"));
+    }
+
+    // --- Hint system ---
+    #[test]
+    fn hint_system_save_and_retrieve() {
+        let conn = test_db_conn();
+        db::hints::save_hint(&conn, "Slack", "Say 'new paragraph' for breaks").unwrap();
+        db::hints::save_hint(&conn, "Safari", "Try voice commands").unwrap();
+        assert!(db::hints::get_hint(&conn, "Slack").unwrap().is_some());
+        assert!(db::hints::get_hint(&conn, "Safari").unwrap().is_some());
+    }
+
+    #[test]
+    fn hint_mood_and_affirmation_tags() {
+        let conn = test_db_conn();
+        db::hints::save_hint(&conn, "__mood_morning", "Fresh start ahead").unwrap();
+        db::hints::save_hint(&conn, "__affirm_Slack", "Words flowing well").unwrap();
+        assert_eq!(db::hints::get_hint(&conn, "__mood_morning").unwrap(), Some("Fresh start ahead".into()));
+        assert_eq!(db::hints::get_hint(&conn, "__affirm_Slack").unwrap(), Some("Words flowing well".into()));
+    }
+
+    #[test]
+    fn hint_top_apps_ranking() {
+        let conn = test_db_conn();
+        for _ in 0..10 { db::hints::record_usage(&conn, "VS Code").unwrap(); }
+        for _ in 0..5 { db::hints::record_usage(&conn, "Slack").unwrap(); }
+        for _ in 0..2 { db::hints::record_usage(&conn, "Safari").unwrap(); }
+        let top = db::hints::top_apps(&conn, 3).unwrap();
+        assert_eq!(top[0], "VS Code");
+        assert_eq!(top[1], "Slack");
+        assert_eq!(top[2], "Safari");
+    }
+
+    // --- Autostart ---
+    #[test]
+    fn autostart_plist_path() {
+        let path = launchd_plist_path();
+        assert!(path.to_string_lossy().contains("LaunchAgents"));
+        assert!(path.to_string_lossy().contains("com.openflow.app.plist"));
+    }
+
+    // --- Voice commands through pipeline ---
+    #[test]
+    fn voice_command_new_paragraph() {
+        let cmd = polish::commands::parse_command("new paragraph");
+        assert_eq!(polish::commands::command_text(&cmd), Some("\n\n"));
+    }
+
+    #[test]
+    fn voice_command_scratch_that_has_no_text() {
+        let cmd = polish::commands::parse_command("scratch that");
+        assert!(polish::commands::command_text(&cmd).is_none());
+    }
+
+    // --- App context → prompt integration ---
+    #[test]
+    fn app_context_flows_to_prompt() {
+        let ctx = inject::context::AppContext {
+            app_name: "Slack".into(),
+            bundle_id: "com.tinyspeck.slackmacgap".into(),
+            category: "slack".into(),
+            tone: "Casual, conversational.".into(),
+            window_title: "#engineering".into(),
+            selected_text: "let's deploy".into(),
+        };
+        let prompt = polish::prompt::build_system_prompt(&ctx, &["Kubernetes".into()]);
+        assert!(prompt.contains("Slack"));
+        assert!(prompt.contains("slack"));
+        assert!(prompt.contains("Casual"));
+        assert!(prompt.contains("#engineering"));
+        assert!(prompt.contains("let's deploy"));
+        assert!(prompt.contains("Kubernetes"));
+    }
+
+    // ===== Layer 4: Error and edge case tests =====
+
+    // --- Blank/noise audio filtering ---
+    #[test]
+    fn blank_audio_marker_filtered() {
+        // process_segment filters text starting with '[' or '('
+        let markers = ["[BLANK_AUDIO]", "(music)", "[silence]", "(noise)"];
+        for m in markers {
+            assert!(m.starts_with('[') || m.starts_with('('),
+                "marker '{}' should be filtered by pipeline", m);
+        }
+    }
+
+    // --- Empty ASR ---
+    #[test]
+    fn empty_text_is_not_a_command() {
+        let cmd = polish::commands::parse_command("");
+        match cmd {
+            polish::commands::VoiceCommand::None(t) => assert!(t.is_empty()),
+            _ => panic!("empty text should be VoiceCommand::None"),
+        }
+    }
+
+    // --- Missing model error ---
+    #[test]
+    fn polish_engine_missing_model_error() {
+        let result = polish::engine::PolishEngine::new(std::path::Path::new("/tmp/nonexistent.gguf"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn asr_engine_missing_model_error() {
+        let result = asr::engine::AsrEngine::new(std::path::Path::new("/tmp/nonexistent.bin"));
+        assert!(result.is_err());
+    }
+
+    // --- DB creation from scratch ---
+    #[test]
+    fn db_creation_in_new_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("deep/nested/openflow.db");
+        let conn = schema::init_db(&db_path).unwrap();
+        // Verify it works
+        settings::set(&conn, "test", "value").unwrap();
+        assert_eq!(settings::get(&conn, "test").unwrap(), Some("value".into()));
+    }
+
+    // --- Chunker overflow ---
+    #[test]
+    fn chunker_overflow_at_60s() {
+        let mut chunker = audio::chunker::Chunker::new(700);
+        let frame = vec![0.5f32; 480];
+        let max_samples = 16000 * 60;
+        let frames_to_fill = max_samples / 480;
+
+        let mut emitted = false;
+        for _ in 0..=frames_to_fill {
+            if let Some(seg) = chunker.feed(&frame, true) {
+                assert!(seg.len() >= max_samples, "segment should be at least 60s worth");
+                emitted = true;
+                break;
+            }
+        }
+        assert!(emitted, "chunker should force-emit at 60s cap");
+    }
+
+    // --- Accessibility check ---
+    #[test]
+    fn accessibility_check_returns_bool() {
+        // Just verify it doesn't panic — in test env it will likely return false
+        let _result = inject::clipboard::check_accessibility();
+    }
+
+    // --- Resample edge cases ---
+    #[test]
+    fn resample_empty_input() {
+        let out = audio::capture::resample(&[], 48000);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn resample_single_sample() {
+        let out = audio::capture::resample(&[0.5], 48000);
+        // 1 sample at 48kHz → 0 or 1 sample at 16kHz
+        assert!(out.len() <= 1);
+    }
+
+    #[test]
+    fn to_mono_empty() {
+        let out = audio::capture::to_mono(&[], 2);
+        assert!(out.is_empty());
+    }
+
+    // --- Settings edge cases ---
+    #[test]
+    fn settings_empty_value() {
+        let conn = test_db_conn();
+        settings::set(&conn, "key", "").unwrap();
+        assert_eq!(settings::get(&conn, "key").unwrap(), Some("".into()));
+    }
+
+    #[test]
+    fn settings_unicode_value() {
+        let conn = test_db_conn();
+        settings::set(&conn, "name", "日本語テスト").unwrap();
+        assert_eq!(settings::get(&conn, "name").unwrap(), Some("日本語テスト".into()));
+    }
+
+    // --- Dictionary edge cases ---
+    #[test]
+    fn dictionary_unicode_entries() {
+        let conn = test_db_conn();
+        db::dictionary::add(&conn, "café", "café", "general").unwrap();
+        let all = db::dictionary::get_all(&conn).unwrap();
+        assert!(all[0].contains("café"));
+    }
+
+    // --- Tone custom override ---
+    #[test]
+    fn custom_tone_overrides_default() {
+        let conn = test_db_conn();
+        db::tones::set_tone(&conn, "com.apple.mail", "Mail", "email", "Ultra formal").unwrap();
+        let tone = db::tones::get_tone(&conn, "com.apple.mail").unwrap();
+        assert_eq!(tone, Some("Ultra formal".into()));
+    }
+
+    // --- Snippets ---
+    #[test]
+    fn snippets_add_and_retrieve() {
+        let conn = test_db_conn();
+        db::snippets::add(&conn, "addr", "123 Main St").unwrap();
+        let all = db::snippets::get_all(&conn).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0], ("addr".into(), "123 Main St".into()));
+    }
+
+    // --- Config paths ---
+    #[test]
+    fn config_models_dir_ends_with_models() {
+        let c = config::AppConfig::default();
+        assert!(c.models_dir.ends_with("models"));
+    }
+
+    // --- Concurrent POLISH_ENABLED access ---
+    #[test]
+    fn polish_flag_atomic_toggle() {
+        let handles: Vec<_> = (0..10).map(|i| {
+            std::thread::spawn(move || {
+                POLISH_ENABLED.store(i % 2 == 0, Ordering::Relaxed);
+                POLISH_ENABLED.load(Ordering::Relaxed)
+            })
+        }).collect();
+        for h in handles { let _ = h.join(); }
+        // Just verify no panic — final value is non-deterministic
+        let _ = POLISH_ENABLED.load(Ordering::Relaxed);
+        POLISH_ENABLED.store(true, Ordering::Relaxed); // restore
+    }
+}

@@ -57,3 +57,110 @@ impl Chunker {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn speech_frame() -> Vec<f32> { vec![0.5; 480] }
+    fn silence_frame() -> Vec<f32> { vec![0.0; 480] }
+
+    #[test]
+    fn no_output_on_silence_only() {
+        let mut c = Chunker::new(700);
+        for _ in 0..100 {
+            assert!(c.feed(&silence_frame(), false).is_none());
+        }
+    }
+
+    #[test]
+    fn no_output_during_speech() {
+        let mut c = Chunker::new(700);
+        for _ in 0..10 {
+            assert!(c.feed(&speech_frame(), true).is_none());
+        }
+    }
+
+    #[test]
+    fn emits_segment_after_silence_threshold() {
+        let mut c = Chunker::new(700);
+        // 10 speech frames
+        for _ in 0..10 {
+            assert!(c.feed(&speech_frame(), true).is_none());
+        }
+        // 700ms / 30ms = ~23 silence frames needed
+        let mut result = None;
+        for _ in 0..30 {
+            if let Some(seg) = c.feed(&silence_frame(), false) {
+                result = Some(seg);
+                break;
+            }
+        }
+        let seg = result.expect("should emit segment after silence");
+        // 10 speech + some silence frames, each 480 samples
+        assert!(seg.len() >= 10 * 480);
+    }
+
+    #[test]
+    fn flush_returns_buffered_audio() {
+        let mut c = Chunker::new(700);
+        for _ in 0..5 {
+            c.feed(&speech_frame(), true);
+        }
+        let seg = c.flush().expect("flush should return buffered audio");
+        assert_eq!(seg.len(), 5 * 480);
+    }
+
+    #[test]
+    fn flush_empty_returns_none() {
+        let mut c = Chunker::new(700);
+        assert!(c.flush().is_none());
+    }
+
+    #[test]
+    fn max_samples_cap_forces_emit() {
+        let mut c = Chunker::new(700);
+        let big_frame = vec![0.5; 480];
+        let max = 16000 * 60; // 960000
+        let frames_needed = max / 480 + 1;
+        let mut emitted = false;
+        for _ in 0..frames_needed {
+            if c.feed(&big_frame, true).is_some() {
+                emitted = true;
+                break;
+            }
+        }
+        assert!(emitted, "should force-emit at max_samples");
+    }
+
+    #[test]
+    fn multiple_segments_from_speech_silence_speech() {
+        let mut c = Chunker::new(90); // short threshold: 90ms/30ms = 3 frames
+        // First speech burst
+        for _ in 0..5 { c.feed(&speech_frame(), true); }
+        // Silence to trigger segment
+        let mut seg1 = None;
+        for _ in 0..5 {
+            if let Some(s) = c.feed(&silence_frame(), false) { seg1 = Some(s); break; }
+        }
+        assert!(seg1.is_some());
+        // Second speech burst
+        for _ in 0..3 { c.feed(&speech_frame(), true); }
+        let mut seg2 = None;
+        for _ in 0..5 {
+            if let Some(s) = c.feed(&silence_frame(), false) { seg2 = Some(s); break; }
+        }
+        assert!(seg2.is_some());
+    }
+
+    #[test]
+    fn state_resets_after_emit() {
+        let mut c = Chunker::new(90);
+        for _ in 0..5 { c.feed(&speech_frame(), true); }
+        for _ in 0..5 { c.feed(&silence_frame(), false); }
+        // After emit, silence should not produce anything
+        for _ in 0..10 {
+            assert!(c.feed(&silence_frame(), false).is_none());
+        }
+    }
+}

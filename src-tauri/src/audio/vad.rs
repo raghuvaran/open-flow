@@ -56,3 +56,73 @@ impl SileroVad {
         self.c.fill(0.0);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AppConfig;
+
+    fn vad_model_path() -> std::path::PathBuf {
+        AppConfig::default().models_dir.join("silero_vad.onnx")
+    }
+
+    #[test]
+    #[ignore] // requires silero_vad.onnx model
+    fn vad_detects_silence() {
+        let mut vad = SileroVad::new(&vad_model_path(), 0.5).unwrap();
+        let silence = vec![0.0f32; 480];
+        assert!(!vad.is_speech(&silence).unwrap());
+    }
+
+    #[test]
+    #[ignore] // requires silero_vad.onnx model
+    fn vad_detects_loud_signal() {
+        let mut vad = SileroVad::new(&vad_model_path(), 0.5).unwrap();
+        // 480 samples of 440Hz sine at 16kHz — simulates speech-like energy
+        let tone: Vec<f32> = (0..480).map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 16000.0).sin() * 0.8).collect();
+        let prob = vad.process_frame(&tone).unwrap();
+        // Just verify it returns a valid probability
+        assert!(prob >= 0.0 && prob <= 1.0);
+    }
+
+    #[test]
+    #[ignore] // requires silero_vad.onnx model
+    fn vad_reset_clears_state() {
+        let mut vad = SileroVad::new(&vad_model_path(), 0.5).unwrap();
+        let tone: Vec<f32> = (0..480).map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 16000.0).sin()).collect();
+        let _ = vad.process_frame(&tone);
+        vad.reset();
+        assert!(vad.h.iter().all(|v| *v == 0.0));
+        assert!(vad.c.iter().all(|v| *v == 0.0));
+    }
+
+    #[test]
+    #[ignore] // requires silero_vad.onnx model
+    fn vad_chunker_integration() {
+        let mut vad = SileroVad::new(&vad_model_path(), 0.5).unwrap();
+        let mut chunker = crate::audio::chunker::Chunker::new(300); // 300ms silence threshold
+
+        // Feed 20 frames of "speech" (loud sine)
+        let tone: Vec<f32> = (0..480).map(|i| (2.0 * std::f32::consts::PI * 200.0 * i as f32 / 16000.0).sin() * 0.9).collect();
+        for _ in 0..20 {
+            let is_speech = vad.is_speech(&tone).unwrap_or(false);
+            chunker.feed(&tone, is_speech);
+        }
+
+        // Feed silence frames until segment emits
+        let silence = vec![0.0f32; 480];
+        let mut got_segment = false;
+        for _ in 0..20 {
+            let is_speech = vad.is_speech(&silence).unwrap_or(false);
+            if chunker.feed(&silence, is_speech).is_some() {
+                got_segment = true;
+                break;
+            }
+        }
+        // Flush as fallback
+        if !got_segment {
+            got_segment = chunker.flush().is_some();
+        }
+        assert!(got_segment, "should produce a segment from speech+silence");
+    }
+}

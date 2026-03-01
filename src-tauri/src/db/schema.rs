@@ -72,3 +72,49 @@ pub fn init_db(path: &Path) -> Result<Connection> {
     )?;
     Ok(conn)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_db() -> Connection {
+        init_db(std::path::Path::new(":memory:")).unwrap()
+    }
+
+    #[test]
+    fn init_creates_all_tables() {
+        let conn = test_db();
+        let tables: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(tables.contains(&"personal_dict".into()));
+        assert!(tables.contains(&"app_tones".into()));
+        assert!(tables.contains(&"injection_history".into()));
+        assert!(tables.contains(&"snippets".into()));
+        assert!(tables.contains(&"model_config".into()));
+        assert!(tables.contains(&"settings".into()));
+        assert!(tables.contains(&"hint_cache".into()));
+    }
+
+    #[test]
+    fn init_is_idempotent() {
+        let conn = test_db();
+        // Second init on same connection should not fail
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+        ).unwrap();
+    }
+
+    #[test]
+    fn init_creates_parent_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("sub/dir/test.db");
+        let conn = init_db(&db_path).unwrap();
+        assert!(db_path.exists());
+        drop(conn);
+    }
+}
