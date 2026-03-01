@@ -56,6 +56,39 @@ pub fn get_active_app() -> AppContext {
 
 #[cfg(target_os = "macos")]
 fn get_ax_context() -> (String, String) {
+    // For terminals, use AppleScript to get buffer content
+    if let Some(text) = get_terminal_content() {
+        let trimmed = text.trim().to_string();
+        let ctx = tail_chars(&trimmed, 200);
+        return (String::new(), ctx);
+    }
+    get_ax_text()
+}
+
+/// Terminal-specific: grab visible buffer via AppleScript
+#[cfg(target_os = "macos")]
+fn get_terminal_content() -> Option<String> {
+    use std::process::Command;
+    // Detect which terminal is frontmost and use its API
+    let script = r#"
+        tell application "System Events"
+            set frontApp to bundle identifier of first application process whose frontmost is true
+        end tell
+        if frontApp is "com.apple.Terminal" then
+            tell application "Terminal" to get contents of selected tab of front window
+        else if frontApp starts with "com.googlecode.iterm2" then
+            tell application "iTerm2" to get contents of current session of current tab of current window
+        else
+            return ""
+        end if
+    "#;
+    let out = Command::new("osascript").arg("-e").arg(script).output().ok()?;
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() { None } else { Some(s) }
+}
+
+#[cfg(target_os = "macos")]
+fn get_ax_text() -> (String, String) {
     use core_foundation::base::TCFType;
     use core_foundation::string::CFString;
 
@@ -114,6 +147,10 @@ fn get_ax_context() -> (String, String) {
     }
 }
 
+pub(crate) fn tail_chars(s: &str, max: usize) -> String {
+    if s.len() <= max { s.to_string() } else { s[s.len()-max..].to_string() }
+}
+
 #[cfg(target_os = "macos")]
 use core_foundation::base::CFTypeRef;
 #[cfg(target_os = "macos")]
@@ -130,7 +167,7 @@ pub fn get_active_app() -> AppContext {
     AppContext::default()
 }
 
-fn categorize_app(bundle_id: &str) -> String {
+pub(crate) fn categorize_app(bundle_id: &str) -> String {
     match bundle_id {
         b if b.contains("mail") || b.contains("Outlook") => "email",
         b if b.contains("slack") => "slack",
@@ -141,7 +178,7 @@ fn categorize_app(bundle_id: &str) -> String {
     }.into()
 }
 
-fn tone_for_category(category: &str) -> String {
+pub(crate) fn tone_for_category(category: &str) -> String {
     match category {
         "email" => "Professional, concise.",
         "slack" => "Casual, conversational.",
@@ -150,4 +187,72 @@ fn tone_for_category(category: &str) -> String {
         "notes" => "Structured. Use headers and lists where appropriate.",
         _ => "Natural, clear prose.",
     }.into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- categorize_app ---
+    #[test]
+    fn categorize_known_apps() {
+        assert_eq!(categorize_app("com.apple.mail"), "email");
+        assert_eq!(categorize_app("com.microsoft.Outlook"), "email");
+        assert_eq!(categorize_app("com.tinyspeck.slackmacgap"), "slack");
+        assert_eq!(categorize_app("com.microsoft.VSCode"), "code");
+        assert_eq!(categorize_app("com.apple.dt.Xcode"), "code");
+        assert_eq!(categorize_app("com.apple.Terminal"), "terminal");
+        assert_eq!(categorize_app("com.googlecode.iTerm2"), "terminal");
+        assert_eq!(categorize_app("notion.id"), "notes");
+    }
+
+    #[test]
+    fn categorize_unknown_app() {
+        assert_eq!(categorize_app("com.random.app"), "default");
+        assert_eq!(categorize_app(""), "default");
+    }
+
+    // --- tone_for_category ---
+    #[test]
+    fn tone_mapping() {
+        assert!(tone_for_category("email").contains("Professional"));
+        assert!(tone_for_category("slack").contains("Casual"));
+        assert!(tone_for_category("code").contains("Technical"));
+        assert!(tone_for_category("terminal").contains("terse"));
+        assert!(tone_for_category("notes").contains("Structured"));
+        assert!(tone_for_category("default").contains("Natural"));
+        assert!(tone_for_category("unknown").contains("Natural"));
+    }
+
+    // --- tail_chars ---
+    #[test]
+    fn tail_chars_short_string() {
+        assert_eq!(tail_chars("hello", 10), "hello");
+    }
+
+    #[test]
+    fn tail_chars_exact_length() {
+        assert_eq!(tail_chars("hello", 5), "hello");
+    }
+
+    #[test]
+    fn tail_chars_truncates() {
+        assert_eq!(tail_chars("hello world", 5), "world");
+    }
+
+    #[test]
+    fn tail_chars_empty() {
+        assert_eq!(tail_chars("", 10), "");
+    }
+
+    // --- AppContext default ---
+    #[test]
+    fn app_context_default() {
+        let ctx = AppContext::default();
+        assert_eq!(ctx.app_name, "Unknown");
+        assert_eq!(ctx.category, "default");
+        assert!(ctx.tone.contains("Natural"));
+        assert!(ctx.window_title.is_empty());
+        assert!(ctx.selected_text.is_empty());
+    }
 }

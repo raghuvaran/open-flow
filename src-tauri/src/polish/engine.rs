@@ -106,7 +106,12 @@ impl PolishEngine {
             "stream": false
         });
 
-        let mut resp = ureq::post(&url)
+        let agent = ureq::Agent::new_with_config(
+            ureq::config::Config::builder()
+                .timeout_global(Some(std::time::Duration::from_secs(15)))
+                .build()
+        );
+        let mut resp = agent.post(&url)
             .header("Content-Type", "application/json")
             .send(&serde_json::to_vec(&body)?)?;
 
@@ -130,5 +135,45 @@ impl Drop for PolishEngine {
         if let Some(ref mut child) = *self.server.lock().unwrap() {
             let _ = child.kill();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AppConfig;
+
+    fn llm_model_path() -> std::path::PathBuf {
+        AppConfig::default().models_dir.join("qwen2.5-3b-instruct-q4_k_m.gguf")
+    }
+
+    #[test]
+    fn new_fails_on_missing_model() {
+        let result = PolishEngine::new(std::path::Path::new("/nonexistent/model.gguf"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    #[ignore] // requires LLM model + llama-server
+    fn generate_returns_text() {
+        let engine = PolishEngine::new(&llm_model_path()).unwrap();
+        let result = engine.generate("You fix grammar.", "i went to the store yesterday and buyed some milk", 64);
+        let text = result.unwrap();
+        assert!(!text.is_empty());
+    }
+
+    #[test]
+    #[ignore] // requires LLM model + llama-server
+    fn generate_respects_system_prompt() {
+        let engine = PolishEngine::new(&llm_model_path()).unwrap();
+        let result = engine.generate(
+            "You are a dictation-to-text converter. Output ONLY the polished transcript.",
+            "um so basically i think we should uh deploy the new version",
+            64,
+        ).unwrap();
+        // Should not contain filler words
+        let lower = result.to_lowercase();
+        assert!(!lower.contains(" um "));
+        assert!(!lower.contains(" uh "));
     }
 }
