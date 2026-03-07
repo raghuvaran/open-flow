@@ -36,6 +36,7 @@ struct AppResources {
     polish: Option<Arc<PolishEngine>>,
     stop_tx: Option<mpsc::Sender<()>>,
     config: AppConfig,
+    _device_watcher: Option<Box<dyn Send + Sync>>,
 }
 
 type SharedResources = Arc<Mutex<AppResources>>;
@@ -80,7 +81,7 @@ fn is_autostart_enabled() -> bool {
     launchd_plist_path().exists()
 }
 
-fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
+fn build_tray_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let config = AppConfig::default();
     let conn = schema::init_db(&config.db_path).ok();
 
@@ -112,11 +113,9 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     let default_mic = CheckMenuItemBuilder::new("Default")
         .id("mic__default").checked(saved_mic.is_empty()).build(app)?;
     let mut mic_sub = SubmenuBuilder::new(app, "Microphone").item(&default_mic);
-    let mut mic_items = vec![default_mic.clone()];
     for mic in &mics {
         let item = CheckMenuItemBuilder::new(mic.as_str())
             .id(format!("mic__{}", mic)).checked(*mic == saved_mic).build(app)?;
-        mic_items.push(item.clone());
         mic_sub = mic_sub.item(&item);
     }
     let mic_menu = mic_sub.build()?;
@@ -145,32 +144,26 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     ];
 
     let mut color_sub = SubmenuBuilder::new(app, "Appearance");
-    let mut color_items = Vec::new();
     for (name, rgba) in &presets {
         let checked = *rgba == saved_color.as_str();
         let item = CheckMenuItemBuilder::new(*name)
             .id(format!("color__{}", rgba)).checked(checked).build(app)?;
-        color_items.push(item.clone());
         color_sub = color_sub.item(&item);
     }
 
-    // Parse current opacity from saved color
     let current_opacity = saved_color.split(',').last()
         .and_then(|s| s.trim().trim_end_matches(')').parse::<f64>().ok())
         .unwrap_or(0.44);
 
     let mut opacity_sub = SubmenuBuilder::new(app, "Opacity");
-    let mut opacity_items = Vec::new();
     for (label, val) in &opacities {
         let checked = (current_opacity - val).abs() < 0.03;
         let item = CheckMenuItemBuilder::new(*label)
             .id(format!("opacity__{}", val)).checked(checked).build(app)?;
-        opacity_items.push(item.clone());
         opacity_sub = opacity_sub.item(&item);
     }
     let opacity_menu = opacity_sub.build()?;
     color_sub = color_sub.separator().item(&opacity_menu);
-
     let color_menu = color_sub.build()?;
 
     // Shortcut submenu
@@ -187,17 +180,15 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
         ("Option+Space",     "alt+space"),
     ];
     let mut shortcut_sub = SubmenuBuilder::new(app, "Shortcut");
-    let mut shortcut_items = Vec::new();
     for (label, key) in &shortcut_presets {
         let checked = *key == saved_shortcut.as_str();
         let item = CheckMenuItemBuilder::new(*label)
             .id(format!("shortcut__{}", key)).checked(checked).build(app)?;
-        shortcut_items.push(item.clone());
         shortcut_sub = shortcut_sub.item(&item);
     }
     let shortcut_menu = shortcut_sub.build()?;
 
-    let menu = MenuBuilder::new(app)
+    MenuBuilder::new(app)
         .item(&show_item)
         .separator()
         .item(&polish_item)
@@ -208,112 +199,128 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
         .item(&shortcut_menu)
         .separator()
         .item(&quit_item)
-        .build()?;
+        .build()
+}
+
+fn handle_menu_event(app: &tauri::AppHandle, id: &str) {
+    match id {
+        "quit" => { std::process::exit(0); }
+        "show" => { let _ = app.emit("show_window", ()); }
+        "pill_color" => {
+            let _ = app.emit("show_window", ());
+            let _ = app.emit("toggle_settings", ());
+        }
+        "polish" => {
+            let current = POLISH_ENABLED.load(Ordering::Relaxed);
+            POLISH_ENABLED.store(!current, Ordering::Relaxed);
+        }
+        "walkie" => {
+            let new_val = !WALKIE_TALKIE.load(Ordering::Relaxed);
+            WALKIE_TALKIE.store(new_val, Ordering::Relaxed);
+            let cfg = AppConfig::default();
+            if let Ok(c) = schema::init_db(&cfg.db_path) {
+                let _ = settings::set(&c, "walkie_talkie", if new_val { "1" } else { "0" });
+            }
+            let _ = app.emit("walkie_changed", new_val);
+        }
+        "autostart" => {
+            let now_on = !is_autostart_enabled();
+            set_autostart(now_on);
+        }
+        _ if id.starts_with("mic__") => {
+            let name = if id == "mic__default" { String::new() } else { id[5..].to_string() };
+            let cfg = AppConfig::default();
+            if let Ok(c) = schema::init_db(&cfg.db_path) {
+                let _ = settings::set(&c, "mic_device", &name);
+            }
+            // Rebuild menu to update check marks
+            rebuild_tray_menu(app);
+            let _ = app.emit("mic_changed", ());
+        }
+        _ if id.starts_with("color__") => {
+            let rgba = id[7..].to_string();
+            let cfg = AppConfig::default();
+            if let Ok(c) = schema::init_db(&cfg.db_path) {
+                let _ = settings::set(&c, "pill_color", &rgba);
+            }
+            rebuild_tray_menu(app);
+            let _ = app.emit("pill_color_changed", &rgba);
+        }
+        _ if id.starts_with("opacity__") => {
+            let new_opacity: f64 = id[9..].parse().unwrap_or(0.44);
+            let cfg = AppConfig::default();
+            if let Ok(c) = schema::init_db(&cfg.db_path) {
+                let current = settings::get(&c, "pill_color").ok().flatten()
+                    .unwrap_or_else(|| "rgba(18, 18, 30, 0.44)".to_string());
+                if let Some(last_comma) = current.rfind(',') {
+                    let new_rgba = format!("{}, {})", &current[..last_comma], new_opacity);
+                    let _ = settings::set(&c, "pill_color", &new_rgba);
+                    let _ = app.emit("pill_color_changed", &new_rgba);
+                }
+            }
+            rebuild_tray_menu(app);
+        }
+        _ if id.starts_with("shortcut__") => {
+            let new_key = id[10..].to_string();
+            let cfg = AppConfig::default();
+            if let Ok(c) = schema::init_db(&cfg.db_path) {
+                let _ = settings::set(&c, "shortcut", &new_key);
+            }
+            rebuild_tray_menu(app);
+            // Re-register the global shortcut
+            use tauri_plugin_global_shortcut::GlobalShortcutExt;
+            let _ = app.global_shortcut().unregister_all();
+            let handle = app.clone();
+            let _ = app.global_shortcut().on_shortcut(new_key.as_str(), move |_app, _shortcut, event| {
+                use tauri_plugin_global_shortcut::ShortcutState;
+                let h = handle.clone();
+                match event.state {
+                    ShortcutState::Pressed => {
+                        tauri::async_runtime::spawn(async move {
+                            if WALKIE_TALKIE.load(Ordering::Relaxed) {
+                                let _ = h.emit("walkie_press", ());
+                            } else {
+                                let _ = h.emit("toggle_listening", ());
+                            }
+                        });
+                    }
+                    ShortcutState::Released => {
+                        if WALKIE_TALKIE.load(Ordering::Relaxed) {
+                            tauri::async_runtime::spawn(async move {
+                                let _ = h.emit("walkie_release", ());
+                            });
+                        }
+                    }
+                }
+            });
+        }
+        _ => {}
+    }
+}
+
+const TRAY_ID: &str = "openflow_tray";
+
+fn rebuild_tray_menu(app: &tauri::AppHandle) {
+    if let Ok(menu) = build_tray_menu(app) {
+        if let Some(tray) = app.tray_by_id(TRAY_ID) {
+            let _ = tray.set_menu(Some(menu));
+        }
+    }
+}
+
+fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
+    let handle = app.handle();
+    let menu = build_tray_menu(handle)?;
 
     let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))
         .expect("tray icon missing");
 
-    let _tray = TrayIconBuilder::new()
+    let _tray = TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
         .menu(&menu)
         .tooltip("OpenFlow")
-        .on_menu_event(move |app, event| {
-            let id = event.id().0.as_str();
-            match id {
-                "quit" => { std::process::exit(0); }
-                "show" => { let _ = app.emit("show_window", ()); }
-                "pill_color" => {
-                    let _ = app.emit("show_window", ());
-                    let _ = app.emit("toggle_settings", ());
-                }
-                "polish" => {
-                    let current = POLISH_ENABLED.load(Ordering::Relaxed);
-                    POLISH_ENABLED.store(!current, Ordering::Relaxed);
-                }
-                "walkie" => {
-                    let new_val = !WALKIE_TALKIE.load(Ordering::Relaxed);
-                    WALKIE_TALKIE.store(new_val, Ordering::Relaxed);
-                    let cfg = AppConfig::default();
-                    if let Ok(c) = schema::init_db(&cfg.db_path) {
-                        let _ = settings::set(&c, "walkie_talkie", if new_val { "1" } else { "0" });
-                    }
-                    let _ = app.emit("walkie_changed", new_val);
-                }
-                "autostart" => {
-                    let now_on = !is_autostart_enabled();
-                    set_autostart(now_on);
-                }
-                _ if id.starts_with("mic__") => {
-                    let name = if id == "mic__default" { String::new() } else { id[5..].to_string() };
-                    for item in &mic_items {
-                        let _ = item.set_checked(item.id().0.as_str() == id);
-                    }
-                    let cfg = AppConfig::default();
-                    if let Ok(c) = schema::init_db(&cfg.db_path) {
-                        let _ = settings::set(&c, "mic_device", &name);
-                    }
-                    let _ = app.emit("mic_changed", ());
-                }
-                _ if id.starts_with("color__") => {
-                    let rgba = id[7..].to_string();
-                    for item in &color_items { let _ = item.set_checked(item.id().0.as_str() == id); }
-                    let cfg = AppConfig::default();
-                    if let Ok(c) = schema::init_db(&cfg.db_path) {
-                        let _ = settings::set(&c, "pill_color", &rgba);
-                    }
-                    let _ = app.emit("pill_color_changed", &rgba);
-                }
-                _ if id.starts_with("opacity__") => {
-                    let new_opacity: f64 = id[9..].parse().unwrap_or(0.44);
-                    for item in &opacity_items { let _ = item.set_checked(item.id().0.as_str() == id); }
-                    // Read current color, replace opacity
-                    let cfg = AppConfig::default();
-                    if let Ok(c) = schema::init_db(&cfg.db_path) {
-                        let current = settings::get(&c, "pill_color").ok().flatten()
-                            .unwrap_or_else(|| "rgba(18, 18, 30, 0.44)".to_string());
-                        if let Some(last_comma) = current.rfind(',') {
-                            let new_rgba = format!("{}, {})", &current[..last_comma], new_opacity);
-                            let _ = settings::set(&c, "pill_color", &new_rgba);
-                            let _ = app.emit("pill_color_changed", &new_rgba);
-                        }
-                    }
-                }
-                _ if id.starts_with("shortcut__") => {
-                    let new_key = id[10..].to_string();
-                    for item in &shortcut_items { let _ = item.set_checked(item.id().0.as_str() == id); }
-                    let cfg = AppConfig::default();
-                    if let Ok(c) = schema::init_db(&cfg.db_path) {
-                        let _ = settings::set(&c, "shortcut", &new_key);
-                    }
-                    // Re-register the global shortcut
-                    use tauri_plugin_global_shortcut::GlobalShortcutExt;
-                    let _ = app.global_shortcut().unregister_all();
-                    let handle = app.clone();
-                    let _ = app.global_shortcut().on_shortcut(new_key.as_str(), move |_app, _shortcut, event| {
-                        use tauri_plugin_global_shortcut::ShortcutState;
-                        let h = handle.clone();
-                        match event.state {
-                            ShortcutState::Pressed => {
-                                tauri::async_runtime::spawn(async move {
-                                    if WALKIE_TALKIE.load(Ordering::Relaxed) {
-                                        let _ = h.emit("walkie_press", ());
-                                    } else {
-                                        let _ = h.emit("toggle_listening", ());
-                                    }
-                                });
-                            }
-                            ShortcutState::Released => {
-                                if WALKIE_TALKIE.load(Ordering::Relaxed) {
-                                    tauri::async_runtime::spawn(async move {
-                                        let _ = h.emit("walkie_release", ());
-                                    });
-                                }
-                            }
-                        }
-                    });
-                }
-                _ => {}
-            }
+        .on_menu_event(|app, event: tauri::menu::MenuEvent| {
+            handle_menu_event(app, event.id().0.as_str());
         })
         .build(app)?;
 
@@ -793,6 +800,7 @@ pub fn run() {
         polish: None,
         stop_tx: None,
         config,
+        _device_watcher: None,
     }));
 
     tauri::Builder::default()
@@ -801,6 +809,20 @@ pub fn run() {
         .manage(resources)
         .setup(|app| {
             setup_tray(app)?;
+
+            // Watch for audio device changes and rebuild tray menu
+            #[cfg(target_os = "macos")]
+            {
+                let handle = app.handle().clone();
+                if let Ok(watcher) = audio::capture::watch_device_changes(move || {
+                    rebuild_tray_menu(&handle);
+                }) {
+                    let res: tauri::State<SharedResources> = app.state();
+                    tauri::async_runtime::block_on(async {
+                        res.lock().await._device_watcher = Some(Box::new(watcher));
+                    });
+                }
+            }
 
             // Start background hint generator
             let hint_res: SharedResources = app.state::<SharedResources>().inner().clone();

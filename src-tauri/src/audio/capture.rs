@@ -1,6 +1,7 @@
 use anyhow::Result;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::Stream;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 pub struct AudioCapture {
@@ -33,6 +34,97 @@ pub fn list_input_devices() -> Result<Vec<String>> {
     Ok(host.input_devices()?
         .filter_map(|d| d.name().ok())
         .collect())
+}
+
+/// Watch for audio device additions/removals via CoreAudio.
+/// Calls `on_change` whenever the device list changes.
+/// Returns a guard — listener stays active until the guard is dropped.
+#[cfg(target_os = "macos")]
+pub fn watch_device_changes<F: Fn() + Send + 'static>(on_change: F) -> Result<DeviceWatcher> {
+    use std::os::raw::c_void;
+
+    const SYSTEM_OBJECT: u32 = 1;
+    const DEVICES_SELECTOR: u32 = u32::from_be_bytes(*b"dev#");
+    const GLOBAL_SCOPE: u32 = u32::from_be_bytes(*b"glob");
+
+    #[repr(C)]
+    struct PropAddr { selector: u32, scope: u32, element: u32 }
+
+    extern "C" {
+        fn AudioObjectAddPropertyListener(
+            id: u32, addr: *const PropAddr,
+            cb: unsafe extern "C" fn(u32, u32, *const PropAddr, *mut c_void) -> i32,
+            data: *mut c_void,
+        ) -> i32;
+    }
+
+    unsafe extern "C" fn on_devices_changed(
+        _id: u32, _n: u32, _addr: *const PropAddr, data: *mut c_void,
+    ) -> i32 {
+        let cb = unsafe { &*(data as *const Box<dyn Fn() + Send>) };
+        cb();
+        0
+    }
+
+    let addr = PropAddr { selector: DEVICES_SELECTOR, scope: GLOBAL_SCOPE, element: 0 };
+    let closure: Arc<Box<dyn Fn() + Send>> = Arc::new(Box::new(on_change));
+    let raw = Arc::into_raw(closure);
+
+    let status = unsafe {
+        AudioObjectAddPropertyListener(SYSTEM_OBJECT, &addr, on_devices_changed, raw as *mut c_void)
+    };
+    if status != 0 {
+        unsafe { Arc::from_raw(raw); }
+        anyhow::bail!("AudioObjectAddPropertyListener failed: {}", status);
+    }
+
+    Ok(DeviceWatcher { data: raw })
+}
+
+#[cfg(target_os = "macos")]
+pub struct DeviceWatcher {
+    data: *const Box<dyn Fn() + Send>,
+}
+
+#[cfg(target_os = "macos")]
+unsafe impl Send for DeviceWatcher {}
+#[cfg(target_os = "macos")]
+unsafe impl Sync for DeviceWatcher {}
+
+#[cfg(target_os = "macos")]
+impl Drop for DeviceWatcher {
+    fn drop(&mut self) {
+        use std::os::raw::c_void;
+
+        #[repr(C)]
+        struct PropAddr { selector: u32, scope: u32, element: u32 }
+
+        extern "C" {
+            fn AudioObjectRemovePropertyListener(
+                id: u32, addr: *const PropAddr,
+                cb: unsafe extern "C" fn(u32, u32, *const PropAddr, *mut c_void) -> i32,
+                data: *mut c_void,
+            ) -> i32;
+        }
+
+        unsafe extern "C" fn on_devices_changed(
+            _id: u32, _n: u32, _addr: *const PropAddr, data: *mut c_void,
+        ) -> i32 {
+            let cb = unsafe { &*(data as *const Box<dyn Fn() + Send>) };
+            cb();
+            0
+        }
+
+        let addr = PropAddr {
+            selector: u32::from_be_bytes(*b"dev#"),
+            scope: u32::from_be_bytes(*b"glob"),
+            element: 0,
+        };
+        unsafe {
+            AudioObjectRemovePropertyListener(1, &addr, on_devices_changed, self.data as *mut c_void);
+            Arc::from_raw(self.data);
+        }
+    }
 }
 
 pub fn start_capture(tx: mpsc::UnboundedSender<Vec<f32>>, device_name: Option<&str>) -> Result<AudioCapture> {
@@ -145,5 +237,22 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert!((out[0] - 0.3).abs() < 1e-6);
         assert!((out[1] - 0.6).abs() < 1e-6);
+    }
+
+    #[test]
+    fn list_input_devices_returns_vec() {
+        // Should not panic; may be empty in CI
+        let devices = list_input_devices().unwrap();
+        assert!(devices.len() < 1000); // sanity check
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn device_watcher_registers_and_drops() {
+        let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let c = called.clone();
+        let watcher = watch_device_changes(move || { c.store(true, std::sync::atomic::Ordering::Relaxed); }).unwrap();
+        // Just verify it doesn't panic on creation or drop
+        drop(watcher);
     }
 }
