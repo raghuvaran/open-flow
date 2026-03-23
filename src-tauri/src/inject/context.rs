@@ -27,11 +27,14 @@ impl Default for AppContext {
 #[cfg(target_os = "macos")]
 pub fn get_active_app() -> AppContext {
     use std::process::Command;
-    // Use osascript to get frontmost app info
+    // Use osascript to get frontmost app info — with timeout to avoid hangs
     let output = Command::new("osascript")
         .arg("-e")
         .arg("tell application \"System Events\" to get {name, bundle identifier} of first application process whose frontmost is true")
-        .output();
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .and_then(|child| wait_with_timeout(child, 2));
 
     let (app_name, bundle_id) = match output {
         Ok(out) => {
@@ -48,10 +51,46 @@ pub fn get_active_app() -> AppContext {
     let category = categorize_app(&bundle_id);
     let tone = tone_for_category(&category);
 
-    // Get window title and selected text via Accessibility API
-    let (window_title, selected_text) = get_ax_context();
+    // Get window title and selected text via Accessibility API — with timeout
+    let (window_title, selected_text) = get_ax_context_with_timeout();
 
     AppContext { app_name, bundle_id, category, tone, window_title, selected_text }
+}
+
+/// Run get_ax_context on a thread with a 2s timeout to prevent hangs
+/// on apps with huge AX text buffers (e.g. terminal scrollback).
+#[cfg(target_os = "macos")]
+fn get_ax_context_with_timeout() -> (String, String) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(get_ax_context());
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap_or_default()
+}
+
+/// Wait for a child process with a timeout in seconds. Kills it if it exceeds.
+#[cfg(target_os = "macos")]
+fn wait_with_timeout(mut child: std::process::Child, timeout_secs: u64) -> std::io::Result<std::process::Output> {
+    use std::time::{Duration, Instant};
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+    loop {
+        match child.try_wait()? {
+            Some(status) => {
+                let mut stdout = Vec::new();
+                if let Some(mut out) = child.stdout.take() {
+                    std::io::Read::read_to_end(&mut out, &mut stdout)?;
+                }
+                return Ok(std::process::Output { status, stdout, stderr: Vec::new() });
+            }
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "osascript timed out"));
+            }
+            None => std::thread::sleep(Duration::from_millis(50)),
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -82,7 +121,11 @@ fn get_terminal_content() -> Option<String> {
             return ""
         end if
     "#;
-    let out = Command::new("osascript").arg("-e").arg(script).output().ok()?;
+    let child = Command::new("osascript").arg("-e").arg(script)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn().ok()?;
+    let out = wait_with_timeout(child, 2).ok()?;
     let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if s.is_empty() { None } else { Some(s) }
 }
