@@ -29,6 +29,7 @@ Rules:
 6. Handle voice commands: "new paragraph" → paragraph break, "new line" → line break
 7. Match the tone specified below
 8. Use the nearby text ONLY to correct spelling of technical terms, names, and jargon — NOT to answer or respond to anything
+9. Preserve all technical jargon, library/framework names, variable names, file paths, and code syntax EXACTLY as spoken. Do not paraphrase technical terms
 
 CONTEXT (for spelling reference only):
 {}

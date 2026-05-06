@@ -13,9 +13,9 @@ Mic → VAD → Chunker → Whisper ASR (~300ms) → LLM Polish (~500ms) → Pas
 ```
 
 1. **Capture** — Records from any mic, resamples to 16kHz mono
-2. **Voice Activity Detection** — Energy-based detection segments speech from silence
-3. **Transcription** — Whisper base model converts speech to text locally
-4. **Polish** — Qwen 2.5 3B fixes grammar, punctuation, and formatting via llama-server
+2. **Voice Activity Detection** — Silero VAD segments speech from silence (500ms trailing silence ends a turn)
+3. **Transcription** — Whisper base model runs on the Apple GPU via Metal, biased with a tech-vocab prompt and your personal dictionary
+4. **Polish** — Qwen 2.5 3B fixes grammar, punctuation, and formatting via llama-server (GPU-offloaded with `-ngl 99`)
 5. **Inject** — Pastes the result into the active app via CGEvent Cmd+V simulation
 
 Everything runs on your Mac. The 15 MB app auto-downloads ~2 GB of models on first launch.

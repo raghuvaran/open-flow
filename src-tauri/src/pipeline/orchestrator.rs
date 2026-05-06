@@ -69,7 +69,12 @@ impl Orchestrator {
 pub(crate) fn process_segment(asr: &AsrEngine, polish: Option<&PolishEngine>, audio: &[f32]) -> Result<(usize, f64)> {
     let start = std::time::Instant::now();
 
-    let raw_text = asr.transcribe(audio)?;
+    let personal_dict = crate::db::schema::init_db(&crate::config::AppConfig::default().db_path)
+        .ok()
+        .and_then(|c| crate::db::dictionary::get_all(&c).ok())
+        .unwrap_or_default();
+
+    let raw_text = asr.transcribe_with_vocab(audio, &personal_dict)?;
     tracing::info!("ASR ({:?}): {}", start.elapsed(), &raw_text);
 
     if raw_text.is_empty() || raw_text.starts_with('[') || raw_text.starts_with('(') {
@@ -87,7 +92,7 @@ pub(crate) fn process_segment(asr: &AsrEngine, polish: Option<&PolishEngine>, au
     let final_text = match (&cmd, polish) {
         (VoiceCommand::None(text), Some(engine)) if use_polish => {
             let ctx = get_active_app();
-            let sys_prompt = prompt::build_system_prompt(&ctx, &[]);
+            let sys_prompt = prompt::build_system_prompt(&ctx, &personal_dict);
             match engine.generate(&sys_prompt, text, 256) {
                 Ok(polished) => polished,
                 Err(e) => {

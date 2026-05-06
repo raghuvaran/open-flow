@@ -120,6 +120,9 @@ fn build_tray_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<ta
     }
     let mic_menu = mic_sub.build()?;
 
+    let version_item = MenuItemBuilder::new(format!("Version {}", app.package_info().version))
+        .id("version").enabled(false).build(app)?;
+
     let quit_item = MenuItemBuilder::new("Quit OpenFlow")
         .id("quit").accelerator("CmdOrCtrl+Q").build(app)?;
 
@@ -198,6 +201,7 @@ fn build_tray_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<ta
         .item(&color_menu)
         .item(&shortcut_menu)
         .separator()
+        .item(&version_item)
         .item(&quit_item)
         .build()
 }

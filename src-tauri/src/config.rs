@@ -17,7 +17,7 @@ impl Default for AppConfig {
         Self {
             models_dir: base.join("models"),
             db_path: base.join("openflow.db"),
-            silence_threshold_ms: 700,
+            silence_threshold_ms: 500,
             sample_rate: 16000,
         }
     }
@@ -32,7 +32,7 @@ mod tests {
         let c = AppConfig::default();
         assert!(c.models_dir.to_string_lossy().contains("openflow"));
         assert!(c.db_path.to_string_lossy().ends_with("openflow.db"));
-        assert_eq!(c.silence_threshold_ms, 700);
+        assert_eq!(c.silence_threshold_ms, 500);
         assert_eq!(c.sample_rate, 16000);
     }
 

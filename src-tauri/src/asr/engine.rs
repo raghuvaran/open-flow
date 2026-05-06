@@ -6,10 +6,15 @@ pub struct AsrEngine {
     ctx: WhisperContext,
 }
 
+/// Seed vocabulary biasing Whisper toward common software/tech terms. Kept short
+/// because whisper's initial prompt is capped at ~224 tokens and longer prompts
+/// bias decoding toward prompt-style phrasing.
+const TECH_VOCAB_SEED: &str = "Kubernetes, Docker, React, Svelte, Tauri, Rust, TypeScript, JavaScript, Python, Go, gRPC, REST, JSON, YAML, SQL, PostgreSQL, Redis, GraphQL, OAuth, JWT, API, CLI, SDK, IDE, LLM, GPU, CPU, async, await, GitHub, PR, CI, CD, CoreAudio, Metal, whisper.cpp, llama.cpp.";
+
 impl AsrEngine {
     pub fn new(model_path: &Path) -> Result<Self> {
         let mut params = WhisperContextParameters::default();
-        params.use_gpu(false);
+        params.use_gpu(true);
 
         let ctx = WhisperContext::new_with_params(
             model_path.to_str().unwrap(),
@@ -20,6 +25,12 @@ impl AsrEngine {
     }
 
     pub fn transcribe(&self, audio: &[f32]) -> Result<String> {
+        self.transcribe_with_vocab(audio, &[])
+    }
+
+    /// Transcribe with an optional personal dictionary biasing Whisper's decoding.
+    /// `personal_dict` entries may be bare terms or "spoken → written" pairs.
+    pub fn transcribe_with_vocab(&self, audio: &[f32], personal_dict: &[String]) -> Result<String> {
         let mut state = self.ctx.create_state()
             .map_err(|e| anyhow::anyhow!("Failed to create state: {}", e))?;
 
@@ -31,6 +42,9 @@ impl AsrEngine {
         params.set_print_timestamps(false);
         params.set_suppress_blank(true);
         params.set_no_timestamps(true);
+
+        let prompt = build_initial_prompt(personal_dict);
+        params.set_initial_prompt(&prompt);
 
         state.full(params, audio)
             .map_err(|e| anyhow::anyhow!("Transcription failed: {}", e))?;
@@ -44,6 +58,23 @@ impl AsrEngine {
             }
         }
         Ok(text.trim().to_string())
+    }
+}
+
+fn build_initial_prompt(personal_dict: &[String]) -> String {
+    let mut terms: Vec<&str> = Vec::new();
+    for entry in personal_dict {
+        // Accept "spoken → written" pairs from the dictionary module — prefer the
+        // written form since that's what we want Whisper to learn to emit.
+        let written = entry.split('→').next_back().unwrap_or(entry).trim();
+        if !written.is_empty() {
+            terms.push(written);
+        }
+    }
+    if terms.is_empty() {
+        TECH_VOCAB_SEED.to_string()
+    } else {
+        format!("{} {}.", TECH_VOCAB_SEED, terms.join(", "))
     }
 }
 
