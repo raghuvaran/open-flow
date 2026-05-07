@@ -18,6 +18,14 @@ pub enum PipelineEvent {
     Stop,
 }
 
+pub struct SegmentStats {
+    pub words: usize,
+    pub total_secs: f64,
+    pub asr_ms: u128,
+    /// `None` when polish was disabled or skipped (voice command, empty input).
+    pub polish_ms: Option<u128>,
+}
+
 pub struct Orchestrator {
     pub event_tx: mpsc::UnboundedSender<PipelineEvent>,
 }
@@ -42,9 +50,12 @@ impl Orchestrator {
                         let _ = handle.emit("pipeline_state", "processing");
                         pending = Some(tokio::task::spawn_blocking(move || {
                             match process_segment(&asr, polish.as_deref(), &audio) {
-                                Ok((words, secs)) if words > 0 => {
+                                Ok(stats) if stats.words > 0 => {
                                     let _ = handle.emit("dictation_stats", serde_json::json!({
-                                        "words": words, "seconds": (secs * 10.0).round() / 10.0
+                                        "words": stats.words,
+                                        "seconds": (stats.total_secs * 10.0).round() / 10.0,
+                                        "asr_ms": stats.asr_ms,
+                                        "polish_ms": stats.polish_ms,
                                     }));
                                 }
                                 Err(e) => tracing::error!("Pipeline error: {}", e),
@@ -66,7 +77,7 @@ impl Orchestrator {
     }
 }
 
-pub(crate) fn process_segment(asr: &AsrEngine, polish: Option<&PolishEngine>, audio: &[f32]) -> Result<(usize, f64)> {
+pub(crate) fn process_segment(asr: &AsrEngine, polish: Option<&PolishEngine>, audio: &[f32]) -> Result<SegmentStats> {
     let start = std::time::Instant::now();
 
     let personal_dict = crate::db::schema::init_db(&crate::config::AppConfig::default().db_path)
@@ -74,26 +85,33 @@ pub(crate) fn process_segment(asr: &AsrEngine, polish: Option<&PolishEngine>, au
         .and_then(|c| crate::db::dictionary::get_all(&c).ok())
         .unwrap_or_default();
 
+    let asr_start = std::time::Instant::now();
     let raw_text = asr.transcribe_with_vocab(audio, &personal_dict)?;
-    tracing::info!("ASR ({:?}): {}", start.elapsed(), &raw_text);
+    let asr_ms = asr_start.elapsed().as_millis();
+    tracing::info!("ASR ({}ms): {}", asr_ms, &raw_text);
 
+    let empty_stats = |ms: u128| SegmentStats { words: 0, total_secs: 0.0, asr_ms: ms, polish_ms: None };
     if raw_text.is_empty() || raw_text.starts_with('[') || raw_text.starts_with('(') {
-        return Ok((0, 0.0));
+        return Ok(empty_stats(asr_ms));
     }
 
     let cmd = commands::parse_command(&raw_text);
     if let Some(text) = commands::command_text(&cmd) {
         clipboard::inject_text(text)?;
-        return Ok((0, 0.0));
+        return Ok(empty_stats(asr_ms));
     }
 
     let use_polish = POLISH_ENABLED.load(Ordering::Relaxed);
 
+    let mut polish_ms: Option<u128> = None;
     let final_text = match (&cmd, polish) {
         (VoiceCommand::None(text), Some(engine)) if use_polish => {
             let ctx = get_active_app();
             let sys_prompt = prompt::build_system_prompt(&ctx, &personal_dict);
-            match engine.generate(&sys_prompt, text, 256) {
+            let polish_start = std::time::Instant::now();
+            let result = engine.generate(&sys_prompt, text, 256);
+            polish_ms = Some(polish_start.elapsed().as_millis());
+            match result {
                 Ok(polished) => polished,
                 Err(e) => {
                     tracing::warn!("LLM polish failed, using raw: {}", e);
@@ -102,7 +120,7 @@ pub(crate) fn process_segment(asr: &AsrEngine, polish: Option<&PolishEngine>, au
             }
         }
         (VoiceCommand::None(text), _) => text.clone(),
-        _ => return Ok((0, 0.0)),
+        _ => return Ok(empty_stats(asr_ms)),
     };
 
     let word_count = final_text.split_whitespace().count();
@@ -120,7 +138,12 @@ pub(crate) fn process_segment(asr: &AsrEngine, polish: Option<&PolishEngine>, au
         std::sync::atomic::Ordering::Relaxed,
     );
 
-    Ok((word_count, elapsed))
+    Ok(SegmentStats {
+        words: word_count,
+        total_secs: elapsed,
+        asr_ms,
+        polish_ms,
+    })
 }
 
 #[cfg(test)]
@@ -148,8 +171,8 @@ mod tests {
     fn process_segment_silence_returns_zero() {
         let asr = AsrEngine::new(&asr_model_path()).unwrap();
         let silence = vec![0.0f32; 16000];
-        let (words, _) = process_segment(&asr, None, &silence).unwrap();
-        assert_eq!(words, 0);
+        let stats = process_segment(&asr, None, &silence).unwrap();
+        assert_eq!(stats.words, 0);
     }
 
     #[test]

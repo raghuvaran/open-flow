@@ -17,7 +17,8 @@
   let hintTimer;
   let hintText = $state("");
   let hintVisible = $state(false);
-  let statsText = $state("");
+  let statsShort = $state("");
+  let statsDetail = $state("");
   let statsVisible = $state(false);
 
   let pillColor = $state("#12121e");
@@ -194,11 +195,19 @@
     await listen("audio_level", (e) => updateBars(e.payload));
     await listen("pipeline_state", (e) => { processing = e.payload === "processing"; });
     await listen("dictation_stats", (e) => {
-      const { words, seconds } = e.payload;
+      const { words, seconds, asr_ms, polish_ms } = e.payload;
       if (words > 0) {
-        statsText = `${words} words in ${seconds}s`;
+        statsShort = `${words} words in ${seconds}s`;
+        // Breakdown revealed on hover. Omit polish segment when it was
+        // skipped (polish off or voice command) so the line stays honest.
+        // Drop the word count on hover — it's in the default view. Showing
+        // just the stage timings keeps the line inside the pill's 200px label
+        // slot even for long dictations.
+        statsDetail = polish_ms != null
+          ? `ASR ${asr_ms}ms · polish ${polish_ms}ms`
+          : `ASR ${asr_ms}ms`;
         statsVisible = true;
-        setTimeout(() => { statsVisible = false; statsText = ""; }, 3500);
+        setTimeout(() => { statsVisible = false; statsShort = ""; statsDetail = ""; }, 3500);
         resetIdleTimer();
       }
     });
@@ -295,7 +304,7 @@
     {#if processing}<div class="proc-dot"></div>{/if}
 
     <span class="label">
-      {#if accessHint && phase === "ready"}<span class="access-hint">Find OpenFlow in the list → toggle on</span>{:else if accessWarning && phase === "ready"}<span class="access-link" onclick={() => { invoke("open_accessibility_settings"); accessWarning = false; accessHint = true; }}>⚠ Enable Accessibility →</span>{:else if processing}Processing{:else if statsVisible && statsText}<span class="hint hint-visible">{statsText}</span>{:else if hintText && hintVisible && phase === "ready"}<span class="hint" class:hint-visible={hintVisible}>{hintText}</span>{:else}{statusMsg}{/if}
+      {#if accessHint && phase === "ready"}<span class="access-hint">Find OpenFlow in the list → toggle on</span>{:else if accessWarning && phase === "ready"}<span class="access-link" onclick={() => { invoke("open_accessibility_settings"); accessWarning = false; accessHint = true; }}>⚠ Enable Accessibility →</span>{:else if processing}Processing{:else if statsVisible && statsShort}<span class="hint hint-visible">{hovered && statsDetail ? statsDetail : statsShort}</span>{:else if hintText && hintVisible && phase === "ready"}<span class="hint" class:hint-visible={hintVisible}>{hintText}</span>{:else}{statusMsg}{/if}
     </span>
 
     {#if hovered}
