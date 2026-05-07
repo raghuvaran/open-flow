@@ -32,13 +32,17 @@ The 15 MB `.app` auto-downloads ~2.1 GB of models on first launch and requires z
 ### 1.2 Measured Performance
 
 ```
-VAD (energy-based):     < 1ms per 30ms frame
-ASR (whisper-base, CPU): 300ms per 1-5s segment
-LLM polish (Qwen 3B):   400-800ms (Metal GPU via llama-server)
-Text injection (CGEvent): ~150ms
+VAD (Silero ONNX):              < 1ms per 30ms frame
+ASR (whisper large-v3-turbo,
+     Metal GPU, greedy):        ~400-600ms for 3-5s speech
+LLM polish (Qwen 2.5 3B,
+     Metal via llama-server):   400-800ms
+Text injection (CGEvent):       ~150ms
 ────────────────────────────────────────
-Total pipeline:          1.0-1.5s per utterance
+Total pipeline:                 ~1.2-1.8s per 3-5s utterance
 ```
+
+Numbers are median on Apple M1 Pro after Metal warmup. Word error rate on dense technical dictation: ~0.10 raw / ~0.26 polished (see [`benchmark/`](../../benchmark/)).
 
 ---
 
@@ -81,8 +85,8 @@ Every character in the pill competes with the user's actual work. Status text sh
 ### 3.1 Data Flow
 
 ```
-Mic (cpal, device default) → Resample 16kHz mono → Energy VAD → Chunker
-    → Whisper ASR (~300ms) → LLM Polish via llama-server (~500ms)
+Mic (cpal, device default) → Resample 16kHz mono → Silero VAD → Chunker
+    → Whisper ASR (Metal, turbo) → LLM Polish via llama-server (Metal)
     → CGEvent Cmd+V paste → Active app
 ```
 
@@ -114,7 +118,7 @@ openflow/
 │   ├── lib.rs                    # App setup, tray, commands, audio loop
 │   ├── audio/
 │   │   ├── capture.rs            # cpal mic → resample → mono, explicit Drop
-│   │   ├── vad.rs                # Silero wrapper (falls back to energy-based)
+│   │   ├── vad.rs                # Silero VAD (ONNX); energy fallback on load failure
 │   │   └── chunker.rs            # Segment detection, 60s buffer cap
 │   ├── asr/engine.rs             # whisper.cpp via whisper-rs
 │   ├── polish/
@@ -143,7 +147,7 @@ The entire first-launch flow happens without the user leaving the app or restart
 1. App opens → pill shows "Downloading models..."
 2. Downloads (with progress in pill):
    - silero_vad.onnx (2 MB, ~1s)
-   - ggml-base.bin (141 MB, ~9s)
+   - ggml-large-v3-turbo-q5_0.bin (547 MB, ~30s)
    - qwen2.5-3b-instruct-q4_k_m.gguf (2 GB, ~2 min)
    - llama-server + dylibs (29 MB tarball, ~3s)
 3. Pill shows "Loading models..." (~2s)
@@ -163,9 +167,11 @@ All models stored in `~/Library/Application Support/openflow/models/`:
 | Asset | Size | Source | Purpose |
 |-------|------|--------|---------|
 | `silero_vad.onnx` | 2 MB | GitHub (snakers4) | Voice activity detection |
-| `ggml-base.bin` | 141 MB | HuggingFace (ggerganov) | Whisper ASR |
+| `ggml-large-v3-turbo-q5_0.bin` | 547 MB | HuggingFace (ggerganov) | Whisper ASR — default |
 | `qwen2.5-3b-instruct-q4_k_m.gguf` | 2 GB | HuggingFace (Qwen) | LLM polish |
 | `llama-server` + dylibs | 29 MB | GitHub (ggml-org, b8123) | LLM inference server |
+
+The ASR loader picks the best available model from `[large-v3-turbo-q5_0, small.en-q5_1, base, small]`, so existing installs on smaller models keep working without a re-download. The turbo default was picked from a benchmark sweep — see [`benchmark/`](../../benchmark/) for methodology and comparison tables.
 
 Downloads use `.part` temp files — interrupted downloads don't leave corrupt files. Existing files are skipped. The llama-server tarball is extracted, extra binaries removed, and `com.apple.quarantine`/`com.apple.provenance` xattrs stripped so macOS doesn't block execution.
 
@@ -185,8 +191,8 @@ Downloads use `.part` temp files — interrupted downloads don't leave corrupt f
 Mic (device default, typically 48kHz stereo)
   → cpal callback: resample to 16kHz mono (linear interpolation)
   → mpsc::UnboundedSender<Vec<f32>>
-  → Energy-based VAD (RMS > 0.01 per 480-sample frame)
-  → Chunker (accumulate speech, dispatch on 700ms silence)
+  → Silero VAD (ONNX, 30ms frames, threshold 0.5)
+  → Chunker (accumulate speech, dispatch on 500ms silence)
   → Segments > 4800 samples (0.3s) → Orchestrator
 ```
 
@@ -194,7 +200,7 @@ Mic (device default, typically 48kHz stereo)
 
 **Resample in callback, not in config:** MacBook mics don't support 16kHz directly. Forcing it via cpal config fails. Always use `device.default_input_config()` and resample in software.
 
-**Energy-based VAD over Silero:** Silero VAD requires `libonnxruntime.dylib` which isn't bundled. The `ort` crate panics at runtime if missing. Energy-based detection (RMS threshold) works well for normal speech. Silero is wrapped in `catch_unwind` as an optional upgrade.
+**Silero VAD with energy-based fallback:** Silero VAD (ONNX via the `ort` crate, `load-dynamic`) is the default. Because `ort` panics if `libonnxruntime.dylib` can't be located, Silero construction is wrapped in `catch_unwind`; on panic the pipeline falls back to an RMS-threshold energy detector so dictation still works.
 
 **mpsc over ring buffer:** Simpler, no sizing issues. The cpal callback sends resampled chunks directly. The consumer loop processes them in a `tokio::select!` alongside the stop signal.
 
@@ -208,9 +214,13 @@ Mic (device default, typically 48kHz stereo)
 
 ## 6. ASR Engine
 
-**Stack:** whisper.cpp via `whisper-rs 0.13`, base model (141 MB), CPU-only.
+**Stack:** whisper.cpp via `whisper-rs 0.13` with the `metal` cargo feature, large-v3-turbo q5_0 (547 MB) running on the Apple GPU via Metal.
 
-**Why CPU-only:** Metal for whisper is safe now that llama-cpp is out-of-process, but hasn't been re-enabled yet. CPU performance (~300ms for base model) is adequate. Re-enabling Metal would cut this to ~100ms.
+**Decoding:** Greedy, no beam search. A benchmark sweep over `{base, small.en, large-v3-turbo} × {greedy, beam=5} × {prompt on, prompt off}` showed greedy consistently matched or beat beam search on both accuracy and latency, and the "initial prompt" (a tech-vocab seed plus the user's personal dictionary) actually *hurt* accuracy on technical dictation for every model. Production runs greedy with the initial prompt disabled — personal-dict biasing still flows through the polish prompt. See [`benchmark/`](../../benchmark/).
+
+**Why turbo:** Cut raw WER on dense technical dictation from 0.33 (base) to 0.10 (turbo) — 2.7× fewer transcription errors — while staying under 2 s of ASR on 17 s of audio. Short utterances (~3-5 s) land around 400-600 ms after warmup.
+
+**Model fallback chain:** The loader picks the first present file in `[large-v3-turbo-q5_0, small.en-q5_1, base, small]`, so existing installs keep working without a forced re-download.
 
 **Output filtering:** Whisper outputs artifacts like `[no speech detected]`, `[BLANK_AUDIO]`, `(music)` for non-speech. Any output starting with `[` or `(` is discarded before reaching the polish step.
 
@@ -234,9 +244,12 @@ Mic (device default, typically 48kHz stereo)
 
 The system prompt includes:
 - Active app name and category (email, slack, code, terminal, notes, default)
+- Window title and nearby text from the focused app (spelling reference only)
 - Tone directive per category ("Professional, concise" for email, "Casual" for Slack)
 - Personal dictionary entries
 - Instructions for filler removal, self-correction detection, voice commands
+
+**Preserve-form rules.** An earlier version of this prompt let the 3B Qwen model paraphrase imperative dictation into descriptive prose — e.g. `"Validate X. Read Y."` became `"You should consider reviewing X, and then read Y to ensure..."`. This doubled post-polish WER on dense technical dictation. The rewritten prompt forbids restructuring sentences, adding interpretive framing, or merging short sentences into long ones; the model must make the smallest edit that produces valid text.
 
 ### 7.3 LLM Priority
 
@@ -320,13 +333,14 @@ Transparent, pill-shaped overlay. Always on top, draggable, position persisted t
 - Close button (✕) appears on hover only, uses `pointerenter/leave` + `document.pointerleave` fallback for reliable hover detection on transparent windows
 - Close = stop listening + hide window (not quit)
 - Show = `window.show()` without `setFocus()` (never steals focus)
+- **Idle auto-hide:** the pill hides itself after 2 minutes of no dictation activity. Activity = starting a listen, receiving a successful transcription (`words > 0`), or an explicit show (hotkey press, tray menu). Hover doesn't count — users leave the mouse over the pill ambiently. The timer is paused while listening, loading, or downloading so the pill doesn't vanish mid-flow.
 
 ### 11.2 States
 
 | State | Pill Appearance |
 |-------|----------------|
 | Loading | Spinner + "Loading models..." |
-| Downloading | Spinner + "Whisper Base 80/141 MB (57%)" |
+| Downloading | Spinner + "Whisper Turbo 320/547 MB (58%)" |
 | Ready | Mic icon + "Ready" (or hint text) |
 | Listening | Waveform bars (green) + "Listening" |
 | Processing | Blue dot + "Processing" |
@@ -427,8 +441,8 @@ In walkie-talkie mode, the audio thread stops on key release, then the chunker f
 |---|---|---|
 | App framework | Tauri 2 + Svelte | Native webview, <50MB idle RAM, system tray, global shortcuts |
 | Audio capture | cpal 0.15 | Cross-platform, low-latency |
-| VAD | Energy-based (Silero fallback) | No external dylib dependency |
-| ASR | whisper-rs 0.13 (whisper.cpp) | Fastest local Whisper, CPU ~300ms |
+| VAD | Silero VAD (ONNX via `ort`) | Robust speech/silence classification at 30ms frame granularity |
+| ASR | whisper-rs 0.13 (whisper.cpp) with `metal` feature | large-v3-turbo q5_0 on Apple GPU; see `benchmark/` |
 | LLM | llama-server (llama.cpp b8123) | Out-of-process, Metal GPU, auto-downloaded |
 | Text injection | core-graphics CGEvent + arboard | Works from any thread, any launch context |
 | Database | rusqlite 0.31 (bundled SQLite) | Zero-config, embedded |
@@ -441,7 +455,10 @@ In walkie-talkie mode, the audio thread stops on key release, then the chunker f
 
 | Priority | Feature | Notes |
 |----------|---------|-------|
-| P0 | Re-enable Metal for whisper | Safe now that llama-cpp is out-of-process. Would cut ASR from 300ms to ~100ms |
+| ✅ Done | Metal for whisper | Shipped with `whisper-rs` `metal` feature + `use_gpu(true)` |
+| ✅ Done | Upgrade ASR model | Default is now `large-v3-turbo`; see `benchmark/` |
+| ✅ Done | Polish prompt preserve-form | Stops 3B Qwen from paraphrasing imperative dictation |
+| ✅ Done | Idle auto-hide | Pill hides itself after 2 min of no dictation activity; hotkey / tray brings it back |
 | P1 | Streaming token injection | Inject sentence-by-sentence as LLM generates, not batch |
 | P1 | Graceful degradation | Dictate without polish if LLM not ready; show text in pill if accessibility not granted |
 | P2 | Download resume | Resume partial downloads instead of restarting |

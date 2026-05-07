@@ -1,0 +1,184 @@
+   Compiling openflow v0.1.0 (/Users/raghuvc/projects/open-flow/src-tauri)
+warning: field `polish_ms_median` is never read
+   --> tests/e2e_experiments.rs:160:5
+    |
+154 | struct Row {
+    |        --- field in this struct
+...
+160 |     polish_ms_median: u128,
+    |     ^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `openflow` (test "e2e_experiments") generated 1 warning
+    Finished `release` profile [optimized] target(s) in 30.08s
+     Running tests/e2e_experiments.rs (src-tauri/target/release/deps/e2e_experiments-68ac97590376840e)
+
+running 1 test
+
+=== Loading base-greedy-p ===
+    loaded in 176.912542ms
+RESULT config=base-greedy-p fixture=tech_jargon asr_ms=449 polish_ms=1208 total_ms=1657 wer_raw=0.325 wer_polished=0.325 audio_s=17.0 rtf=0.03
+RESULT config=base-greedy-p fixture=tech_jargon_2 asr_ms=609 polish_ms=1531 total_ms=2152 wer_raw=0.333 wer_polished=0.357 audio_s=17.1 rtf=0.04
+
+=== Loading base-greedy-NOp ===
+    loaded in 97.575583ms
+RESULT config=base-greedy-NOp fixture=tech_jargon asr_ms=485 polish_ms=1220 total_ms=1706 wer_raw=0.275 wer_polished=0.300 audio_s=17.0 rtf=0.03
+RESULT config=base-greedy-NOp fixture=tech_jargon_2 asr_ms=598 polish_ms=1393 total_ms=2014 wer_raw=0.310 wer_polished=0.452 audio_s=17.1 rtf=0.03
+
+=== Loading base-beam5-p ===
+    loaded in 103.825584ms
+RESULT config=base-beam5-p fixture=tech_jargon asr_ms=786 polish_ms=1224 total_ms=2006 wer_raw=0.250 wer_polished=0.250 audio_s=17.0 rtf=0.05
+test run_experiments has been running for over 60 seconds
+RESULT config=base-beam5-p fixture=tech_jargon_2 asr_ms=1100 polish_ms=1454 total_ms=2541 wer_raw=0.262 wer_polished=0.357 audio_s=17.1 rtf=0.06
+
+=== Loading small.en-greedy-p ===
+    loaded in 134.626875ms
+RESULT config=small.en-greedy-p fixture=tech_jargon asr_ms=908 polish_ms=1211 total_ms=2120 wer_raw=0.250 wer_polished=0.250 audio_s=17.0 rtf=0.05
+RESULT config=small.en-greedy-p fixture=tech_jargon_2 asr_ms=1077 polish_ms=1487 total_ms=2710 wer_raw=0.119 wer_polished=0.214 audio_s=17.1 rtf=0.06
+
+=== Loading small.en-beam5-p ===
+    loaded in 104.9685ms
+RESULT config=small.en-beam5-p fixture=tech_jargon asr_ms=1683 polish_ms=1147 total_ms=2815 wer_raw=0.300 wer_polished=0.300 audio_s=17.0 rtf=0.10
+RESULT config=small.en-beam5-p fixture=tech_jargon_2 asr_ms=1986 polish_ms=1460 total_ms=3531 wer_raw=0.095 wer_polished=0.214 audio_s=17.1 rtf=0.12
+
+=== Loading small.en-greedy-p-t8 ===
+    loaded in 109.25675ms
+RESULT config=small.en-greedy-p-t8 fixture=tech_jargon asr_ms=977 polish_ms=1203 total_ms=2180 wer_raw=0.250 wer_polished=0.250 audio_s=17.0 rtf=0.06
+RESULT config=small.en-greedy-p-t8 fixture=tech_jargon_2 asr_ms=1163 polish_ms=1483 total_ms=2664 wer_raw=0.119 wer_polished=0.214 audio_s=17.1 rtf=0.07
+
+=== Loading turbo-greedy-p ===
+    loaded in 392.636042ms
+RESULT config=turbo-greedy-p fixture=tech_jargon asr_ms=1759 polish_ms=1153 total_ms=2893 wer_raw=0.125 wer_polished=0.325 audio_s=17.0 rtf=0.10
+RESULT config=turbo-greedy-p fixture=tech_jargon_2 asr_ms=1852 polish_ms=1498 total_ms=3352 wer_raw=0.167 wer_polished=0.190 audio_s=17.1 rtf=0.11
+
+=== Loading turbo-greedy-NOp ===
+    loaded in 297.604917ms
+RESULT config=turbo-greedy-NOp fixture=tech_jargon asr_ms=1634 polish_ms=1117 total_ms=2818 wer_raw=0.125 wer_polished=0.325 audio_s=17.0 rtf=0.10
+RESULT config=turbo-greedy-NOp fixture=tech_jargon_2 asr_ms=1836 polish_ms=1554 total_ms=3393 wer_raw=0.071 wer_polished=0.190 audio_s=17.1 rtf=0.11
+
+=== Loading turbo-greedy-NOp-t8 ===
+    loaded in 346.2505ms
+RESULT config=turbo-greedy-NOp-t8 fixture=tech_jargon asr_ms=1699 polish_ms=1151 total_ms=2861 wer_raw=0.125 wer_polished=0.325 audio_s=17.0 rtf=0.10
+RESULT config=turbo-greedy-NOp-t8 fixture=tech_jargon_2 asr_ms=1917 polish_ms=1520 total_ms=3478 wer_raw=0.071 wer_polished=0.190 audio_s=17.1 rtf=0.11
+
+=== Loading turbo-beam5-p ===
+    loaded in 511.444ms
+RESULT config=turbo-beam5-p fixture=tech_jargon asr_ms=2450 polish_ms=1114 total_ms=3593 wer_raw=0.125 wer_polished=0.325 audio_s=17.0 rtf=0.14
+RESULT config=turbo-beam5-p fixture=tech_jargon_2 asr_ms=2793 polish_ms=1536 total_ms=4500 wer_raw=0.190 wer_polished=0.214 audio_s=17.1 rtf=0.16
+
+======== RAW TRANSCRIPTS (last run of each) ========
+[base-greedy-p/tech_jargon]
+    RAW:      Expect cases when activated in descent, trials started, subscription purchased, 1p subscription restored when user has active trial, expected cases when deactivated in descent, trial expired, user requests account deletion, subscription canceled, 1p subscription canceled.
+    POLISHED: Expect cases when activated in descent, trials started, subscription purchased, 1p subscription restored when user has active trial. Expected cases when deactivated in descent, trial expired, user requests account deletion, subscription canceled, 1p subscription canceled.
+[base-greedy-p/tech_jargon_2]
+    RAW:      While dating usefulness of IndicTest, while date from first principle's point of view, if the integration tests are really testing important customer interactions, test row business, non-sack of NC behavior, read the product requirements from docs/requiemint/p0.md to make sure you didn't miss anything on the requirements.
+    POLISHED: While dating the usefulness of IndicTest, while dating from first principle's point of view, if the integration tests are really testing important customer interactions, test row business, non-sack of NC behavior, read the product requirements from docs/requiemint/p0.md to make sure you didn't miss anything on the requirements.
+[base-greedy-NOp/tech_jargon]
+    RAW:      Expect cases when activated even descent, trials started, subscription purchased, 1p subscription restored when user has active trial, expected cases when deactivated even descent, trial expired, user requests account deletion, subscription cancelled, 1p subscription cancelled.
+    POLISHED: Expect cases when activated, even descent. Trials started, subscription purchased, 1p subscription restored when user has an active trial. Expected cases when deactivated, even descent. Trial expired, user requests account deletion, subscription cancelled, 1p subscription cancelled.
+[base-greedy-NOp/tech_jargon_2]
+    RAW:      While dating usefulness of Indic tests, while dating from first principles point of view, the integration tests are really testing important customer interactions, test row business, non-sack of NC behavior, read the product requirements from docs/requiemint/p0.md to make sure you didn't miss anything on the requirements.
+    POLISHED: While dating the usefulness of Indic tests, from a first principles point of view, integration tests really test important customer interactions, business rules, and non-functional aspects like NC behavior. Read the product requirements from docs/requiemint/p0.md to make sure you didn't miss anything on the requirements.
+[base-beam5-p/tech_jargon]
+    RAW:      Expect cases when activated event descent, trial started, subscription purchased, 1p subscription restored, when user has active trial, expected cases when deactivated event descent, trial expired, user requests account deletion, subscription canceled, 1p subscription canceled.
+    POLISHED: Expect cases when activated event descent, trial started, subscription purchased, 1p subscription restored. When user has active trial, expected cases when deactivated event descent, trial expired, user requests account deletion, subscription canceled, 1p subscription canceled.
+[base-beam5-p/tech_jargon_2]
+    RAW:      While dating usefulness of IndicTest, while date from first principles point of view, the integration tests are really testing important customer interactions, test row business, non-psychofancy behavior, read the product requirements from docs/requiemint/p0.md to make sure you didn't miss anything on the requirements.
+    POLISHED: While dating the usefulness of IndicTest, while from first principles point of view, integration tests really test important customer interactions, test row business, non-psychofancy behavior. Read the product requirements from docs/requiemint/p0.md to make sure you didn't miss anything on the requirements.
+[small.en-greedy-p/tech_jargon]
+    RAW:      Expected cases when activated event descent, trials started. Subscription purchased, 1P subscription restored. When user has active trial, expected cases when deactivated event descent, trial expired, user requests, account deletion. Subscription canceled, 1P subscription canceled.
+    POLISHED: Expected cases when activated event descent, trials started. Subscription purchased, 1P subscription restored. When user has active trial, expected cases when deactivated event descent, trial expired, user requests, account deletion. Subscription canceled, 1P subscription canceled.
+[small.en-greedy-p/tech_jargon_2]
+    RAW:      Validating usefulness of Indictests. Validate from first principles point of view if the integration tests are really testing important customer interactions, test robustness, non-psychofency behavior, read the product requirements from docs/requirement/p0.md to make sure you didn't miss anything on the requirements.
+    POLISHED: Validating the usefulness of Indictests. Validate from a first principles point of view if the integration tests are really testing important customer interactions, robustness, and non-psychofency behavior. Read the product requirements from docs/requirement/p0.md to make sure you didn't miss anything on the requirements.
+[small.en-beam5-p/tech_jargon]
+    RAW:      Expected cases when activated event descent, trials started. Subscription purchased, one-piece subscription restored. When user has active trial, expected cases when deactivated event descent, trial expired, user requests, account deletion. Subscription canceled, one-piece subscription canceled.
+    POLISHED: Expected cases when activated event descent, trials started. Subscription purchased, one-piece subscription restored. When user has active trial, expected cases when deactivated event descent, trial expired, user requests, account deletion. Subscription canceled, one-piece subscription canceled.
+[small.en-beam5-p/tech_jargon_2]
+    RAW:      Validating usefulness of index tests. Validate from first principles point of view if the integration tests are really testing important customer interactions, test robustness, non-psycho-fancy behavior, read the product requirements from docs/requirement/p0.md to make sure you didn't miss anything on the requirements.
+    POLISHED: Validating the usefulness of index tests. Validate from a first principles point of view if integration tests are really testing important customer interactions, robustness, and non-psychotic behavior. Read the product requirements from docs/requirement/p0.md to make sure you didn't miss anything on the requirements.
+[small.en-greedy-p-t8/tech_jargon]
+    RAW:      Expected cases when activated event descent, trials started. Subscription purchased, 1P subscription restored. When user has active trial, expected cases when deactivated event descent, trial expired, user requests, account deletion. Subscription canceled, 1P subscription canceled.
+    POLISHED: Expected cases when activated event descent, trials started. Subscription purchased, 1P subscription restored. When user has active trial, expected cases when deactivated event descent, trial expired, user requests, account deletion. Subscription canceled, 1P subscription canceled.
+[small.en-greedy-p-t8/tech_jargon_2]
+    RAW:      Validating usefulness of Indictests. Validate from first principles point of view if the integration tests are really testing important customer interactions, test robustness, non-psychofency behavior, read the product requirements from docs/requirement/p0.md to make sure you didn't miss anything on the requirements.
+    POLISHED: Validating the usefulness of Indictests. Validate from a first principles point of view if the integration tests are really testing important customer interactions, robustness, and non-psychofency behavior. Read the product requirements from docs/requirement/p0.md to make sure you didn't miss anything on the requirements.
+[turbo-greedy-p/tech_jargon]
+    RAW:      Expected cases when activated event is sent. Trial started. Subscription purchased. 1P subscription restored when user has active trial. Expected cases when deactivated event is sent. Trial expired. User requests account deletion. Subscription canceled. 1P subscription canceled.
+    POLISHED: Expected cases when activated event is sent:
+- Trial started.
+- Subscription purchased.
+
+Expected cases when deactivated event is sent:
+- Trial expired.
+- User requests account deletion.
+- Subscription canceled.
+- 1P subscription canceled.
+[turbo-greedy-p/tech_jargon_2]
+    RAW:      Validating usefulness of Integ tests. Validate from first principles point of view if the integration tests are really testing important customer interactions, test robustness, non-psychofancy behavior. Read the product requirements from docs slash requirement slash p0.md to make sure you didn't miss anything on the requirements.
+    POLISHED: Validating the usefulness of integration tests. Validate from a first principles point of view if the integration tests are really testing important customer interactions, robustness, and non-psychosoft behavior. Read the product requirements from docs/requirement/p0.md to make sure you didn't miss anything on the requirements.
+[turbo-greedy-NOp/tech_jargon]
+    RAW:      Expected cases when activated event is sent. Trial started. Subscription purchased. 1P subscription restored when user has active trial. Expected cases when deactivated event is sent. Trial expired. User requests account deletion. Subscription canceled. 1P subscription canceled.
+    POLISHED: Expected cases when activated event is sent:
+- Trial started.
+- Subscription purchased.
+
+Expected cases when deactivated event is sent:
+- Trial expired.
+- User requests account deletion.
+- Subscription canceled.
+- 1P subscription canceled.
+[turbo-greedy-NOp/tech_jargon_2]
+    RAW:      Validating usefulness of Integ tests Validate from first principles point of view if the integration tests are really testing important customer interactions, test robustness, non-psychofancy behavior. Read the product requirements from docs/requirement/p0.md to make sure you didn't miss anything on the requirements.
+    POLISHED: Validating the usefulness of integration tests. Validate from a first principles point of view: if the integration tests are really testing important customer interactions, robustness, and non-psychoscientific behavior. Read the product requirements from docs/requirement/p0.md to make sure you didn't miss anything on the requirements.
+[turbo-greedy-NOp-t8/tech_jargon]
+    RAW:      Expected cases when activated event is sent. Trial started. Subscription purchased. 1P subscription restored when user has active trial. Expected cases when deactivated event is sent. Trial expired. User requests account deletion. Subscription canceled. 1P subscription canceled.
+    POLISHED: Expected cases when activated event is sent:
+- Trial started.
+- Subscription purchased.
+
+Expected cases when deactivated event is sent:
+- Trial expired.
+- User requests account deletion.
+- Subscription canceled.
+- 1P subscription canceled.
+[turbo-greedy-NOp-t8/tech_jargon_2]
+    RAW:      Validating usefulness of Integ tests Validate from first principles point of view if the integration tests are really testing important customer interactions, test robustness, non-psychofancy behavior. Read the product requirements from docs/requirement/p0.md to make sure you didn't miss anything on the requirements.
+    POLISHED: Validating the usefulness of integration tests. Validate from a first principles point of view: if the integration tests are really testing important customer interactions, robustness, and non-psychosoft behavior. Read the product requirements from docs/requirement/p0.md to make sure you didn't miss anything on the requirements.
+[turbo-beam5-p/tech_jargon]
+    RAW:      Expected cases when activated event is sent. Trial started. Subscription purchased. 1P subscription restored when user has active trial. Expected cases when deactivated event is sent. Trial expired. User requests account deletion. Subscription canceled. 1P subscription canceled.
+    POLISHED: Expected cases when activated event is sent:
+- Trial started.
+- Subscription purchased.
+
+Expected cases when deactivated event is sent:
+- Trial expired.
+- User requests account deletion.
+- Subscription canceled.
+- 1P subscription canceled.
+[turbo-beam5-p/tech_jargon_2]
+    RAW:      Validating usefulness of intake tests. Validate from first principles point of view if the integration tests are really testing important customer interactions, test robustness, non-psychophancy behavior. Read the product requirements from docs slash requirement slash p0.md to make sure you didn't miss anything on the requirements.
+    POLISHED: Validating the usefulness of intake tests. Validate from a first principles point of view if integration tests are really testing important customer interactions, robustness, and non-psychophancy behavior. Read the product requirements from docs/requirement/p0.md to make sure you didn't miss anything on the requirements.
+
+======== PER-CONFIG AVERAGES (across fixtures) ========
+config                           asr_ms   total_ms    wer_raw    wer_pol      rtf
+turbo-greedy-NOp                   1735       3106      0.098      0.258     0.10
+turbo-greedy-NOp-t8                1808       3170      0.098      0.258     0.11
+turbo-greedy-p                     1806       3122      0.146      0.258     0.11
+turbo-beam5-p                      2622       4046      0.158      0.270     0.15
+small.en-greedy-p                   992       2415      0.185      0.232     0.06
+small.en-greedy-p-t8               1070       2422      0.185      0.232     0.06
+small.en-beam5-p                   1834       3173      0.198      0.257     0.11
+base-beam5-p                        943       2274      0.256      0.304     0.06
+base-greedy-NOp                     542       1860      0.292      0.376     0.03
+base-greedy-p                       529       1904      0.329      0.341     0.03
+
+======== PARETO NOTES ========
+best accuracy   : turbo-greedy-NOp (wer_raw=0.098, asr_ms=1735)
+fastest ASR     : base-greedy-p (asr_ms=529, wer_raw=0.329)
+balanced pick   : small.en-greedy-p (wer_raw=0.185, asr_ms=992)
+test run_experiments ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 315.31s
+

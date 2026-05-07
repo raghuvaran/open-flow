@@ -18,10 +18,13 @@ const MODELS: &[ModelInfo] = &[
         url: "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx",
         filename: "silero_vad.onnx",
     },
+    // Whisper large-v3-turbo (q5_0) — see benchmark/ for the sweep that
+    // picked this. ~34% lower WER than base with ~4× latency on 17s audio;
+    // on short utterances still well inside the "feels snappy" budget.
     ModelInfo {
-        name: "Whisper Base",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
-        filename: "ggml-base.bin",
+        name: "Whisper Turbo",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
+        filename: "ggml-large-v3-turbo-q5_0.bin",
     },
     ModelInfo {
         name: "Qwen 2.5 3B",
@@ -29,6 +32,22 @@ const MODELS: &[ModelInfo] = &[
         filename: "qwen2.5-3b-instruct-q4_k_m.gguf",
     },
 ];
+
+/// ASR model candidates in priority order (best → fallback). Preserves
+/// compatibility with existing installs that only have `ggml-base.bin`.
+pub const ASR_CANDIDATES: &[&str] = &[
+    "ggml-large-v3-turbo-q5_0.bin",
+    "ggml-small.en-q5_1.bin",
+    "ggml-base.bin",
+    "ggml-small.bin",
+];
+
+/// Returns the first ASR model file present in `models_dir`, or `None`.
+pub fn find_asr_model(models_dir: &Path) -> Option<std::path::PathBuf> {
+    ASR_CANDIDATES.iter()
+        .map(|f| models_dir.join(f))
+        .find(|p| p.exists())
+}
 
 #[derive(Clone, serde::Serialize)]
 struct DownloadProgress {

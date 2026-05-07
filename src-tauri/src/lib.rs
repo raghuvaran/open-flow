@@ -335,8 +335,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
 async fn check_models() -> Result<serde_json::Value, String> {
     let config = AppConfig::default();
     let vad = config.models_dir.join("silero_vad.onnx").exists();
-    let asr = config.models_dir.join("ggml-base.bin").exists()
-           || config.models_dir.join("ggml-small.bin").exists();
+    let asr = models::download::find_asr_model(&config.models_dir).is_some();
     let llm = config.models_dir.join("qwen2.5-3b-instruct-q4_k_m.gguf").exists();
     let server = config.models_dir.join(models::download::LLAMA_SERVER_FILENAME).exists();
     Ok(serde_json::json!({
@@ -361,18 +360,11 @@ async fn load_models(res: tauri::State<'_, SharedResources>) -> Result<String, S
     let config = AppConfig::default();
     let mut r = res.lock().await;
     if r.asr.is_none() {
-        let p = config.models_dir.join("ggml-base.bin");
-        if !p.exists() {
-            let p2 = config.models_dir.join("ggml-small.bin");
-            if !p2.exists() { return Err("ASR model not found".into()); }
-            tracing::info!("Loading ASR model (small)...");
-            let engine = load_on_thread(move || AsrEngine::new(&p2)).await?;
-            r.asr = Some(Arc::new(engine));
-        } else {
-            tracing::info!("Loading ASR model (base)...");
-            let engine = load_on_thread(move || AsrEngine::new(&p)).await?;
-            r.asr = Some(Arc::new(engine));
-        }
+        let p = models::download::find_asr_model(&config.models_dir)
+            .ok_or_else(|| "ASR model not found".to_string())?;
+        tracing::info!("Loading ASR model: {}", p.file_name().unwrap().to_string_lossy());
+        let engine = load_on_thread(move || AsrEngine::new(&p)).await?;
+        r.asr = Some(Arc::new(engine));
         tracing::info!("ASR loaded");
     }
     if r.polish.is_none() {

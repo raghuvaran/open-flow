@@ -6,6 +6,30 @@ pub struct AsrEngine {
     ctx: WhisperContext,
 }
 
+/// Knobs that benchmarks and production share. Production pins sensible
+/// defaults via `Default`; the e2e experiment harness flips these to sweep
+/// configurations.
+#[derive(Debug, Clone)]
+pub struct AsrOpts {
+    /// Beam size for beam-search decoding. `None` → greedy (fastest).
+    pub beam_size: Option<i32>,
+    /// Override whisper.cpp's default thread count (0 / None = library default).
+    pub n_threads: Option<i32>,
+    /// If false, skip the initial-prompt biasing entirely (ablation baseline).
+    pub use_initial_prompt: bool,
+}
+
+impl Default for AsrOpts {
+    fn default() -> Self {
+        // Greedy decoding beats beam search in our sweep (beam=5 is both slower
+        // and less accurate — whisper.cpp greedy already uses temperature
+        // fallback). The initial prompt hurt accuracy on technical dictation
+        // for every model we tested, so it's off by default; personal-dict
+        // biasing still flows through the polish prompt. See benchmark/.
+        Self { beam_size: None, n_threads: None, use_initial_prompt: false }
+    }
+}
+
 /// Seed vocabulary biasing Whisper toward common software/tech terms. Kept short
 /// because whisper's initial prompt is capped at ~224 tokens and longer prompts
 /// bias decoding toward prompt-style phrasing.
@@ -31,10 +55,23 @@ impl AsrEngine {
     /// Transcribe with an optional personal dictionary biasing Whisper's decoding.
     /// `personal_dict` entries may be bare terms or "spoken → written" pairs.
     pub fn transcribe_with_vocab(&self, audio: &[f32], personal_dict: &[String]) -> Result<String> {
+        self.transcribe_with_opts(audio, personal_dict, &AsrOpts::default())
+    }
+
+    pub fn transcribe_with_opts(
+        &self,
+        audio: &[f32],
+        personal_dict: &[String],
+        opts: &AsrOpts,
+    ) -> Result<String> {
         let mut state = self.ctx.create_state()
             .map_err(|e| anyhow::anyhow!("Failed to create state: {}", e))?;
 
-        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        let strategy = match opts.beam_size {
+            Some(bs) if bs > 1 => SamplingStrategy::BeamSearch { beam_size: bs, patience: -1.0 },
+            _ => SamplingStrategy::Greedy { best_of: 1 },
+        };
+        let mut params = FullParams::new(strategy);
         params.set_language(Some("en"));
         params.set_print_special(false);
         params.set_print_progress(false);
@@ -42,9 +79,15 @@ impl AsrEngine {
         params.set_print_timestamps(false);
         params.set_suppress_blank(true);
         params.set_no_timestamps(true);
+        if let Some(t) = opts.n_threads {
+            params.set_n_threads(t);
+        }
 
-        let prompt = build_initial_prompt(personal_dict);
-        params.set_initial_prompt(&prompt);
+        let prompt;
+        if opts.use_initial_prompt {
+            prompt = build_initial_prompt(personal_dict);
+            params.set_initial_prompt(&prompt);
+        }
 
         state.full(params, audio)
             .map_err(|e| anyhow::anyhow!("Transcription failed: {}", e))?;
@@ -85,8 +128,8 @@ mod tests {
 
     fn asr_model_path() -> std::path::PathBuf {
         let cfg = AppConfig::default();
-        let base = cfg.models_dir.join("ggml-base.bin");
-        if base.exists() { base } else { cfg.models_dir.join("ggml-small.bin") }
+        crate::models::download::find_asr_model(&cfg.models_dir)
+            .unwrap_or_else(|| cfg.models_dir.join("ggml-base.bin"))
     }
 
     #[test]

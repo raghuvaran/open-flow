@@ -149,7 +149,12 @@ Once opened the first time, macOS will remember your choice.
 │       ├── inject/clipboard.rs   # CGEvent Cmd+V paste
 │       ├── models/download.rs    # Auto-download from HuggingFace
 │       ├── db/                   # SQLite settings persistence
-│       └── config.rs             # Paths and defaults
+│       ├── config.rs             # Paths and defaults
+│       └── tests/
+│           ├── e2e_voice.rs      # voice → transcript e2e tests
+│           ├── e2e_experiments.rs # ASR config sweep + WER/latency
+│           └── fixtures/         # voice fixtures + record.sh
+├── benchmark/                    # benchmark logs + methodology
 └── tauri.conf.json
 ```
 
@@ -160,8 +165,22 @@ Downloaded to `~/Library/Application Support/openflow/models/`:
 | Model | Size | Purpose |
 |-------|------|---------|
 | `silero_vad.onnx` | 2 MB | Voice activity detection |
-| `ggml-base.bin` | 141 MB | Whisper base — speech to text |
+| `ggml-large-v3-turbo-q5_0.bin` | 547 MB | Whisper large-v3-turbo — speech to text (auto-selected if present) |
 | `qwen2.5-3b-instruct-q4_k_m.gguf` | 2 GB | Text polish and formatting |
+
+Existing installs carrying `ggml-base.bin` (141 MB) or `ggml-small.en-q5_1.bin` (181 MB) continue to work — the loader picks the best model available. See [`benchmark/`](benchmark/) for why turbo is the default.
+
+## Performance
+
+Measured on an Apple M1 Pro (MacBook Pro, 16GB) over two ~17-second fixtures of dense technical dictation. Median of 5 runs after Metal warmup. WER = word error rate against a ground-truth reference (lower is better). Full methodology, logs, and the sweep harness live in [`benchmark/`](benchmark/).
+
+| config                              |  ASR  |  Total |  WER (raw) |  WER (polished) |
+|-------------------------------------|------:|-------:|-----------:|----------------:|
+| **turbo, greedy, no prompt** *(default)* | 1.7 s | 3.1 s |  **0.098** |        0.258    |
+| small.en, greedy                    | 1.0 s |  2.4 s |     0.185  |        0.232    |
+| base, greedy *(pre-optimization)*   | 0.5 s |  1.9 s |     0.329  |        0.651    |
+
+The switch from `base` → `large-v3-turbo` cut ASR WER from 0.33 to 0.10 — **2.7× fewer transcription errors** — while keeping ASR under 2 seconds on 17 seconds of audio. A separate polish-prompt rewrite halved the post-polish WER on dense technical dictation by stopping the 3B LLM from paraphrasing imperative dictation into hedged descriptive prose.
 
 ## Tech Stack
 

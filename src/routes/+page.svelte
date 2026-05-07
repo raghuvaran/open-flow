@@ -107,6 +107,20 @@
     idleFrame = requestAnimationFrame(idleAnimate);
   }
 
+  // Auto-hide after 2 minutes of no dictation activity. "Activity" = starting
+  // a listen, a successful transcription, or the user opening the pill via
+  // hotkey / tray. Hover doesn't count — users leave the mouse over the pill
+  // ambiently. The timer is paused while listening or loading.
+  const IDLE_HIDE_MS = 2 * 60 * 1000;
+  let idleHideTimer;
+  function resetIdleTimer() {
+    clearTimeout(idleHideTimer);
+    if (phase === "listening" || phase === "loading" || phase === "init") return;
+    idleHideTimer = setTimeout(async () => {
+      try { await getCurrentWindow().hide(); } catch {}
+    }, IDLE_HIDE_MS);
+  }
+
   let savePosTimer;
   async function onMoved() {
     clearTimeout(savePosTimer);
@@ -125,6 +139,7 @@
     statusMsg = "Listening";
     clearHint();
     idleAnimate();
+    resetIdleTimer();
   }
 
   async function stopListening() {
@@ -136,6 +151,7 @@
     bars = [...smoothBars];
     cancelAnimationFrame(idleFrame);
     startHintPolling();
+    resetIdleTimer();
   }
 
   async function toggle() {
@@ -150,6 +166,7 @@
 
   async function showWidget() {
     await getCurrentWindow().show();
+    resetIdleTimer();
   }
 
   onMount(async () => {
@@ -182,6 +199,7 @@
         statsText = `${words} words in ${seconds}s`;
         statsVisible = true;
         setTimeout(() => { statsVisible = false; statsText = ""; }, 3500);
+        resetIdleTimer();
       }
     });
     await listen("accessibility_missing", () => { if (!accessHint) accessWarning = true; });
@@ -245,6 +263,7 @@
       phase = "ready";
       statusMsg = "Ready";
       startHintPolling();
+      resetIdleTimer();
     } catch (e) { statusMsg = `Error: ${e}`; }
   });
 </script>

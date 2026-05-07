@@ -130,8 +130,8 @@ mod tests {
 
     fn asr_model_path() -> std::path::PathBuf {
         let cfg = AppConfig::default();
-        let base = cfg.models_dir.join("ggml-base.bin");
-        if base.exists() { base } else { cfg.models_dir.join("ggml-small.bin") }
+        crate::models::download::find_asr_model(&cfg.models_dir)
+            .unwrap_or_else(|| cfg.models_dir.join("ggml-base.bin"))
     }
 
     #[test]
